@@ -81,6 +81,8 @@ Vortex installation is also possible!
 
 ## Notes and limitations
 
+- Icon Browser is still **under development** and should be considered a work in progress.
+- Some icons and UI graphics are currently **not displayed correctly** or may fail to render as expected.
 - Icon Browser is focused on **UI icon materials and related UI assets**.
 - The browser works from an included index and loaded UI packages, so it is a targeted developer tool, not a full raw asset explorer for every game resource.
 - Some assets may depend on package availability or game-side loading behavior.

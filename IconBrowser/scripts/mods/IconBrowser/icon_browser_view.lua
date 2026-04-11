@@ -8,14 +8,70 @@ local ScrollbarPassTemplates = require("scripts/ui/pass_templates/scrollbar_pass
 local ViewElementInputLegend = require("scripts/ui/view_elements/view_element_input_legend/view_element_input_legend")
 local UIWorkspaceSettings = require("scripts/settings/ui/ui_workspace_settings")
 
+local clone = table.clone
+local max = math.max
+local floor = math.floor
+local format = string.format
+
 local function _clone(style)
-    return table.clone(style)
+    return clone(style)
+end
+
+local function _scaled(value, scale)
+    return max(1, floor(value * scale + 0.5))
+end
+
+local function _scaled_font_size(base_font_size, scale, min_value)
+    return max(min_value, floor(base_font_size * scale + 0.5))
+end
+
+local function _make_left_aligned_text_style(base_style)
+    local style = _clone(base_style)
+    style.text_horizontal_alignment = "left"
+    style.horizontal_alignment = "left"
+    style.vertical_alignment = "center"
+    style.text_vertical_alignment = "center"
+
+    return style
+end
+
+local function _make_header_text_style(base_style, offset_x)
+    local style = _clone(base_style)
+    style.offset = { offset_x, 0, 3 }
+
+    return style
 end
 
 local VIEW_NAME = "icon_browser_view"
 
-local ID_COLUMN_X = 90
-local PATH_COLUMN_X = 170
+local BASE_LAYOUT = {
+    background = {
+        size = { 1500, 920 },
+        position = { 0, 0, 1 },
+    },
+    title_text = {
+        size = { 1420, 50 },
+        position = { 40, 10, 2 },
+    },
+    table_header = {
+        size = { 1410, 40 },
+        position = { 40, 70, 2 },
+    },
+    grid_area = {
+        size = { 1410, 780 },
+        position = { 40, 118, 1 },
+    },
+    scrollbar = {
+        size = { 10, 780 },
+        position = { 22, 0, 2 },
+    },
+    columns = {
+        id_x = 90,
+        path_x = 170,
+    },
+    row_height = 64,
+    icon_size = 48,
+}
 
 local IconBrowserView = class("IconBrowserView", "BaseView")
 
@@ -27,32 +83,32 @@ IconBrowserView.init = function(self, settings)
             parent = "screen",
             horizontal_alignment = "center",
             vertical_alignment = "center",
-            size = { 1500, 920 },
-            position = { 0, 0, 1 },
+            size = clone(BASE_LAYOUT.background.size),
+            position = clone(BASE_LAYOUT.background.position),
         },
 
         title_text = {
             parent = "background",
             horizontal_alignment = "left",
             vertical_alignment = "top",
-            size = { 1420, 50 },
-            position = { 40, 10, 2 },
+            size = clone(BASE_LAYOUT.title_text.size),
+            position = clone(BASE_LAYOUT.title_text.position),
         },
 
         table_header = {
             parent = "background",
             horizontal_alignment = "left",
             vertical_alignment = "top",
-            size = { 1410, 40 },
-            position = { 40, 70, 2 },
+            size = clone(BASE_LAYOUT.table_header.size),
+            position = clone(BASE_LAYOUT.table_header.position),
         },
 
         grid_area = {
             parent = "background",
             horizontal_alignment = "left",
             vertical_alignment = "top",
-            size = { 1410, 780 },
-            position = { 40, 118, 1 },
+            size = clone(BASE_LAYOUT.grid_area.size),
+            position = clone(BASE_LAYOUT.grid_area.position),
         },
 
         grid_content_pivot = {
@@ -67,17 +123,12 @@ IconBrowserView.init = function(self, settings)
             parent = "grid_area",
             horizontal_alignment = "right",
             vertical_alignment = "top",
-            size = { 10, 780 },
-            position = { 22, 0, 2 },
+            size = clone(BASE_LAYOUT.scrollbar.size),
+            position = clone(BASE_LAYOUT.scrollbar.position),
         },
     }
 
-    local header_style = _clone(UIFontSettings.header_2)
-    header_style.text_horizontal_alignment = "left"
-    header_style.horizontal_alignment = "left"
-    header_style.vertical_alignment = "center"
-    header_style.text_vertical_alignment = "center"
-
+    local header_style = _make_left_aligned_text_style(UIFontSettings.header_2)
     local title_style = _clone(UIFontSettings.header_1)
     title_style.text_horizontal_alignment = "left"
     title_style.horizontal_alignment = "left"
@@ -97,31 +148,19 @@ IconBrowserView.init = function(self, settings)
                 value_id = "icon_header",
                 pass_type = "text",
                 value = mod:localize("column_icon"),
-                style = (function()
-                    local s = _clone(header_style)
-                    s.offset = { 12, 0, 3 }
-                    return s
-                end)(),
+                style = _make_header_text_style(header_style, 12),
             },
             {
                 value_id = "id_header",
                 pass_type = "text",
                 value = mod:localize("column_id"),
-                style = (function()
-                    local s = _clone(header_style)
-                    s.offset = { ID_COLUMN_X, 0, 3 }
-                    return s
-                end)(),
+                style = _make_header_text_style(header_style, BASE_LAYOUT.columns.id_x),
             },
             {
                 value_id = "path_header",
                 pass_type = "text",
                 value = mod:localize("column_path"),
-                style = (function()
-                    local s = _clone(header_style)
-                    s.offset = { PATH_COLUMN_X, 0, 3 }
-                    return s
-                end)(),
+                style = _make_header_text_style(header_style, BASE_LAYOUT.columns.path_x),
             },
         }, "table_header"),
 
@@ -146,16 +185,27 @@ IconBrowserView.init = function(self, settings)
 
     IconBrowserView.super.init(self, definitions, settings)
 
-    self._row_height = 64
-    self._icon_size = 48
+    self._rows = {}
+    self._row_align = {}
+    self._grid = nil
+
+    self._base_title_font_size = (title_style and title_style.font_size) or 32
+    self._base_header_font_size = (header_style and header_style.font_size) or 24
+    self._row_height = BASE_LAYOUT.row_height
+    self._icon_size = BASE_LAYOUT.icon_size
+    self._id_column_x = BASE_LAYOUT.columns.id_x
+    self._path_column_x = BASE_LAYOUT.columns.path_x
+    self._grid_width = BASE_LAYOUT.grid_area.size[1]
+    self._current_scale = nil
+    self._current_offset_x = nil
+    self._current_offset_y = nil
 end
 
 function IconBrowserView.on_enter(self)
     IconBrowserView.super.on_enter(self)
     mod._icon_browser_view_open = true
     self:_setup_input_legend()
-    self:_build_rows()
-    self:_setup_grid()
+    self:apply_layout_settings(true)
 end
 
 function IconBrowserView.on_exit(self)
@@ -174,63 +224,67 @@ function IconBrowserView.cb_on_back_pressed(self)
 end
 
 function IconBrowserView._setup_input_legend(self)
-    self._input_legend_element = self:_add_element(ViewElementInputLegend, "input_legend", 10)
-    self._input_legend_element:set_display_name(mod:localize("mod_name"))
+    local input_legend_element = self:_add_element(ViewElementInputLegend, "input_legend", 10)
+    local legend_inputs = self._definitions.legend_inputs
 
-    for _, e in ipairs(self._definitions.legend_inputs) do
-        self._input_legend_element:add_entry(
-            e.display_name,
-            e.input_action,
-            e.visibility_function,
-            e.on_pressed_callback and callback(self, e.on_pressed_callback),
-            e.alignment
+    self._input_legend_element = input_legend_element
+    input_legend_element:set_display_name(mod:localize("mod_name"))
+
+    for i = 1, #legend_inputs do
+        local entry = legend_inputs[i]
+        input_legend_element:add_entry(
+            entry.display_name,
+            entry.input_action,
+            entry.visibility_function,
+            entry.on_pressed_callback and callback(self, entry.on_pressed_callback),
+            entry.alignment
         )
     end
 end
 
-local function _row_definition(row_height, icon_size)
-    local id_style = _clone(UIFontSettings.list_button)
-    id_style.text_horizontal_alignment = "left"
-    id_style.horizontal_alignment = "left"
-    id_style.vertical_alignment = "center"
-    id_style.text_vertical_alignment = "center"
-    id_style.offset = { ID_COLUMN_X, 0, 3 }
+local function _row_definition(row_height, icon_size, id_column_x, path_column_x, grid_width, scale)
+    local id_style = _make_left_aligned_text_style(UIFontSettings.list_button)
+    id_style.offset = { id_column_x, 0, 3 }
 
-    local path_style = _clone(UIFontSettings.list_button)
-    path_style.text_horizontal_alignment = "left"
-    path_style.horizontal_alignment = "left"
-    path_style.vertical_alignment = "center"
-    path_style.text_vertical_alignment = "center"
-    path_style.offset = { PATH_COLUMN_X, 0, 3 }
+    local path_style = _make_left_aligned_text_style(UIFontSettings.list_button)
+    path_style.offset = { path_column_x, 0, 3 }
 
     local icon_style = {
         vertical_alignment = "center",
         horizontal_alignment = "left",
         size = { icon_size, icon_size },
-        offset = { 12, 0, 2 },
+        offset = { _scaled(12, scale), 0, 2 },
         color = { 255, 255, 255, 255 },
     }
 
+    if id_style.font_size then
+        id_style.font_size = _scaled_font_size(id_style.font_size, scale, 10)
+    end
+
+    if path_style.font_size then
+        path_style.font_size = _scaled_font_size(path_style.font_size, scale, 10)
+    end
+
     return UIWidget.create_definition({
         { pass_type = "hotspot", content_id = "hotspot" },
-        { pass_type = "rect", style_id = "bg", style = { color = { 120, 0, 0, 0 } } },
-        { value_id = "icon", pass_type = "texture", style_id = "icon", value = "", style = icon_style },
-        { value_id = "icon_id", pass_type = "text", style_id = "icon_id", value = "", style = id_style },
-        { value_id = "path", pass_type = "text", style_id = "path", value = "", style = path_style },
+        { pass_type = "rect",    style_id = "bg",       style = { color = { 120, 0, 0, 0 } } },
+        { value_id = "icon",     pass_type = "texture", style_id = "icon",                   value = "", style = icon_style },
+        { value_id = "icon_id",  pass_type = "text",    style_id = "icon_id",                value = "", style = id_style },
+        { value_id = "path",     pass_type = "text",    style_id = "path",                   value = "", style = path_style },
         {
             pass_type = "rect",
             style_id = "hover",
             style = { color = { 0, 255, 255, 255 }, offset = { 0, 0, 10 } },
             change_function = function(content, style)
-                local hs = content.hotspot
-                style.color[1] = (hs and (hs.is_hover or hs.is_focused)) and 35 or 0
+                local hotspot = content.hotspot
+                style.color[1] = (hotspot and (hotspot.is_hover or hotspot.is_focused)) and 35 or 0
             end,
         },
-    }, "grid_content_pivot", nil, { 1410, row_height })
+    }, "grid_content_pivot", nil, { grid_width, row_height })
 end
 
 local function _log_icon_selection(icon_id, path)
-    local message = string.format("[IconBrowser] #%d %s", icon_id, path)
+    local message = format("[IconBrowser] #%d %s", icon_id, path)
 
     mod:echo(message)
 
@@ -243,24 +297,28 @@ function IconBrowserView._build_rows(self)
     local icons = mod.get_icon_paths()
     local widgets = {}
     local align = {}
-    local row_def = _row_definition(self._row_height, self._icon_size)
+    local row_def = _row_definition(self._row_height, self._icon_size, self._id_column_x, self._path_column_x,
+        self._grid_width, self._current_scale or 1)
 
-    for i, p in ipairs(icons) do
-        local w = self:_create_widget("icon_row_" .. i, row_def)
-        w.content.icon = p
-        w.content.icon_id = "#" .. i
-        w.content.path = p
+    for i, path in ipairs(icons) do
+        local widget = self:_create_widget("icon_row_" .. i, row_def)
+        local content = widget.content
+        local style = widget.style
 
-        if w.style and w.style.bg and w.style.bg.color then
-            w.style.bg.color[1] = (i % 2 == 1) and 105 or 125
+        content.icon = path
+        content.icon_id = "#" .. i
+        content.path = path
+
+        if style and style.bg and style.bg.color then
+            style.bg.color[1] = (i % 2 == 1) and 105 or 125
         end
 
-        w.content.hotspot.pressed_callback = function()
-            _log_icon_selection(i, p)
+        content.hotspot.pressed_callback = function()
+            _log_icon_selection(i, path)
         end
 
-        widgets[#widgets + 1] = w
-        align[#align + 1] = w
+        widgets[i] = widget
+        align[i] = widget
     end
 
     self._rows = widgets
@@ -268,31 +326,151 @@ function IconBrowserView._build_rows(self)
 end
 
 function IconBrowserView._setup_grid(self)
-    local grid = UIWidgetGrid:new(self._rows, self._row_align, self._ui_scenegraph, "grid_area", "down", { 0, 2 }, nil, true)
+    local grid = UIWidgetGrid:new(self._rows, self._row_align, self._ui_scenegraph, "grid_area", "down", { 0, 2 }, nil,
+        true)
     local scrollbar = self._widgets_by_name.scrollbar
     grid:assign_scrollbar(scrollbar, "grid_content_pivot", "grid_area", true)
     grid:set_scrollbar_progress(0)
     self._grid = grid
 end
 
+function IconBrowserView._apply_scenegraph_layout(self, scale, offset_x, offset_y)
+    local ui_scenegraph = self._ui_scenegraph
+    local background = ui_scenegraph.background
+    local title_text = ui_scenegraph.title_text
+    local table_header = ui_scenegraph.table_header
+    local grid_area = ui_scenegraph.grid_area
+    local scrollbar = ui_scenegraph.scrollbar
+
+    background.size[1] = _scaled(BASE_LAYOUT.background.size[1], scale)
+    background.size[2] = _scaled(BASE_LAYOUT.background.size[2], scale)
+    background.position[1] = offset_x
+    background.position[2] = offset_y
+
+    title_text.size[1] = _scaled(BASE_LAYOUT.title_text.size[1], scale)
+    title_text.size[2] = _scaled(BASE_LAYOUT.title_text.size[2], scale)
+    title_text.position[1] = _scaled(BASE_LAYOUT.title_text.position[1], scale)
+    title_text.position[2] = _scaled(BASE_LAYOUT.title_text.position[2], scale)
+
+    table_header.size[1] = _scaled(BASE_LAYOUT.table_header.size[1], scale)
+    table_header.size[2] = _scaled(BASE_LAYOUT.table_header.size[2], scale)
+    table_header.position[1] = _scaled(BASE_LAYOUT.table_header.position[1], scale)
+    table_header.position[2] = _scaled(BASE_LAYOUT.table_header.position[2], scale)
+
+    grid_area.size[1] = _scaled(BASE_LAYOUT.grid_area.size[1], scale)
+    grid_area.size[2] = _scaled(BASE_LAYOUT.grid_area.size[2], scale)
+    grid_area.position[1] = _scaled(BASE_LAYOUT.grid_area.position[1], scale)
+    grid_area.position[2] = _scaled(BASE_LAYOUT.grid_area.position[2], scale)
+
+    scrollbar.size[1] = _scaled(BASE_LAYOUT.scrollbar.size[1], scale)
+    scrollbar.size[2] = _scaled(BASE_LAYOUT.scrollbar.size[2], scale)
+    scrollbar.position[1] = _scaled(BASE_LAYOUT.scrollbar.position[1], scale)
+    scrollbar.position[2] = _scaled(BASE_LAYOUT.scrollbar.position[2], scale)
+end
+
+function IconBrowserView._apply_widget_layout(self, scale)
+    local title_widget = self._widgets_by_name.title_text
+    local header_widget = self._widgets_by_name.table_header
+
+    if title_widget and title_widget.style and title_widget.style.text and title_widget.style.text.font_size then
+        title_widget.style.text.font_size = _scaled_font_size(self._base_title_font_size, scale, 14)
+    end
+
+    if header_widget and header_widget.style then
+        local header_style = header_widget.style
+        local icon_header = header_style.icon_header
+        local id_header = header_style.id_header
+        local path_header = header_style.path_header
+
+        if icon_header then
+            icon_header.offset[1] = _scaled(12, scale)
+
+            if icon_header.font_size then
+                icon_header.font_size = _scaled_font_size(self._base_header_font_size, scale, 12)
+            end
+        end
+
+        if id_header then
+            id_header.offset[1] = self._id_column_x
+
+            if id_header.font_size then
+                id_header.font_size = _scaled_font_size(self._base_header_font_size, scale, 12)
+            end
+        end
+
+        if path_header then
+            path_header.offset[1] = self._path_column_x
+
+            if path_header.font_size then
+                path_header.font_size = _scaled_font_size(self._base_header_font_size, scale, 12)
+            end
+        end
+    end
+end
+
+function IconBrowserView.apply_layout_settings(self, force)
+    local scale = mod.get_icon_browser_scale() / 100
+    local offset_x = mod.get_icon_browser_offset_x()
+    local offset_y = mod.get_icon_browser_offset_y()
+    local current_scale = self._current_scale
+    local current_offset_x = self._current_offset_x
+    local current_offset_y = self._current_offset_y
+    local layout_changed = force
+        or current_scale ~= scale
+        or current_offset_x ~= offset_x
+        or current_offset_y ~= offset_y
+
+    if not layout_changed then
+        return
+    end
+
+    local size_changed = force or current_scale ~= scale
+
+    self._current_scale = scale
+    self._current_offset_x = offset_x
+    self._current_offset_y = offset_y
+    self._row_height = _scaled(BASE_LAYOUT.row_height, scale)
+    self._icon_size = _scaled(BASE_LAYOUT.icon_size, scale)
+    self._id_column_x = _scaled(BASE_LAYOUT.columns.id_x, scale)
+    self._path_column_x = _scaled(BASE_LAYOUT.columns.path_x, scale)
+    self._grid_width = _scaled(BASE_LAYOUT.grid_area.size[1], scale)
+
+    self:_apply_scenegraph_layout(scale, offset_x, offset_y)
+    self:_apply_widget_layout(scale)
+
+    if size_changed then
+        self:_build_rows()
+        self:_setup_grid()
+    end
+end
+
 function IconBrowserView.update(self, dt, t, input_service)
     IconBrowserView.super.update(self, dt, t, input_service)
+    self:apply_layout_settings(false)
 
-    if self._grid then
-        self._grid:update(dt, t, input_service)
+    local grid = self._grid
+
+    if grid then
+        grid:update(dt, t, input_service)
     end
 end
 
 function IconBrowserView.draw(self, dt, t, input_service, layer)
     IconBrowserView.super.draw(self, dt, t, input_service, layer)
 
-    if self._grid then
+    local grid = self._grid
+
+    if grid then
         local ui_renderer = self._ui_renderer
+        local rows = self._rows
+
         UIRenderer.begin_pass(ui_renderer, self._ui_scenegraph, input_service, dt, self._render_settings)
 
-        for _, w in ipairs(self._rows) do
-            if self._grid:is_widget_visible(w) then
-                UIWidget.draw(w, ui_renderer)
+        for i = 1, #rows do
+            local widget = rows[i]
+
+            if grid:is_widget_visible(widget) then
+                UIWidget.draw(widget, ui_renderer)
             end
         end
 

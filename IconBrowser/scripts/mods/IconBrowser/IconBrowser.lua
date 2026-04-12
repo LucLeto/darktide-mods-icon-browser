@@ -3,6 +3,7 @@ local Views = require("scripts/ui/views/views")
 
 local floor = math.floor
 local sort = table.sort
+local format = string.format
 
 local VIEW_NAME = "icon_browser_view"
 local VIEW_PACKAGE = "packages/ui/views/system_view/system_view"
@@ -336,9 +337,40 @@ end
 _register_view()
 mod._icon_paths = mod._icon_paths or _load_icon_index()
 mod._icon_browser_view_open = mod._icon_browser_view_open or false
+mod._icon_render_failures = mod._icon_render_failures or {}
 
 function mod.get_icon_paths()
     return mod._icon_paths or {}
+end
+
+function mod.can_render_icon_path(path)
+    return type(path) == "string" and path ~= "" and not mod._icon_render_failures[path]
+end
+
+function mod.mark_icon_render_failed(path, error_message)
+    if type(path) ~= "string" or path == "" then
+        return
+    end
+
+    local failures = mod._icon_render_failures
+
+    if failures[path] then
+        return
+    end
+
+    failures[path] = true
+
+    local message = format("[IconBrowser] Failed to render icon preview: %s", path)
+
+    if error_message and error_message ~= "" then
+        message = format("%s (%s)", message, tostring(error_message))
+    end
+
+    mod:echo(message)
+
+    if Mods and Mods.message and Mods.message.echo then
+        Mods.message.echo(message)
+    end
 end
 
 function mod.open_icon_browser(...)

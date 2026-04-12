@@ -268,9 +268,18 @@ local function _row_definition(row_height, icon_size, id_column_x, path_column_x
     return UIWidget.create_definition({
         { pass_type = "hotspot", content_id = "hotspot" },
         { pass_type = "rect",    style_id = "bg",       style = { color = { 120, 0, 0, 0 } } },
-        { value_id = "icon",     pass_type = "texture", style_id = "icon",                   value = "", style = icon_style },
-        { value_id = "icon_id",  pass_type = "text",    style_id = "icon_id",                value = "", style = id_style },
-        { value_id = "path",     pass_type = "text",    style_id = "path",                   value = "", style = path_style },
+        {
+            value_id = "icon",
+            pass_type = "texture",
+            style_id = "icon",
+            value = "",
+            style = icon_style,
+            visibility_function = function(content)
+                return content.icon_available and content.icon ~= nil and content.icon ~= ""
+            end,
+        },
+        { value_id = "icon_id", pass_type = "text", style_id = "icon_id", value = "", style = id_style },
+        { value_id = "path",    pass_type = "text", style_id = "path",    value = "", style = path_style },
         {
             pass_type = "rect",
             style_id = "hover",
@@ -293,6 +302,24 @@ local function _log_icon_selection(icon_id, path)
     end
 end
 
+function IconBrowserView._disable_icon_preview(self, widget, error_message)
+    local content = widget and widget.content
+
+    if not content or content.icon_available == false then
+        return
+    end
+
+    local icon_path = content.icon_source or content.path or content.icon
+
+    content.icon_available = false
+    content.icon_draw_guarded = false
+    content.icon = ""
+
+    if icon_path then
+        mod.mark_icon_render_failed(icon_path, error_message)
+    end
+end
+
 function IconBrowserView._build_rows(self)
     local icons = mod.get_icon_paths()
     local widgets = {}
@@ -304,8 +331,12 @@ function IconBrowserView._build_rows(self)
         local widget = self:_create_widget("icon_row_" .. i, row_def)
         local content = widget.content
         local style = widget.style
+        local icon_available = mod.can_render_icon_path(path)
 
-        content.icon = path
+        content.icon_source = path
+        content.icon_available = icon_available
+        content.icon_draw_guarded = icon_available
+        content.icon = icon_available and path or ""
         content.icon_id = "#" .. i
         content.path = path
 
@@ -470,7 +501,20 @@ function IconBrowserView.draw(self, dt, t, input_service, layer)
             local widget = rows[i]
 
             if grid:is_widget_visible(widget) then
-                UIWidget.draw(widget, ui_renderer)
+                local content = widget.content
+
+                if content and content.icon_draw_guarded then
+                    local ok, error_message = pcall(UIWidget.draw, widget, ui_renderer)
+
+                    if ok then
+                        content.icon_draw_guarded = false
+                    else
+                        self:_disable_icon_preview(widget, error_message)
+                        pcall(UIWidget.draw, widget, ui_renderer)
+                    end
+                else
+                    UIWidget.draw(widget, ui_renderer)
+                end
             end
         end
 

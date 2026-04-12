@@ -312,7 +312,6 @@ function IconBrowserView._disable_icon_preview(self, widget, error_message)
     local icon_path = content.icon_source or content.path or content.icon
 
     content.icon_available = false
-    content.icon_draw_guarded = false
     content.icon = ""
 
     if icon_path then
@@ -335,7 +334,6 @@ function IconBrowserView._build_rows(self)
 
         content.icon_source = path
         content.icon_available = icon_available
-        content.icon_draw_guarded = icon_available
         content.icon = icon_available and path or ""
         content.icon_id = "#" .. i
         content.path = path
@@ -501,19 +499,11 @@ function IconBrowserView.draw(self, dt, t, input_service, layer)
             local widget = rows[i]
 
             if grid:is_widget_visible(widget) then
-                local content = widget.content
+                local ok, error_message = pcall(UIWidget.draw, widget, ui_renderer)
 
-                if content and content.icon_draw_guarded then
-                    local ok, error_message = pcall(UIWidget.draw, widget, ui_renderer)
-
-                    if ok then
-                        content.icon_draw_guarded = false
-                    else
-                        self:_disable_icon_preview(widget, error_message)
-                        pcall(UIWidget.draw, widget, ui_renderer)
-                    end
-                else
-                    UIWidget.draw(widget, ui_renderer)
+                if not ok then
+                    self:_disable_icon_preview(widget, error_message)
+                    pcall(UIWidget.draw, widget, ui_renderer)
                 end
             end
         end

@@ -11,7 +11,7 @@ local PACKAGE_REF = "IconBrowser"
 local VIEW_MODULE = "IconBrowser/scripts/mods/IconBrowser/icon_browser_view"
 local ALT_VIEW_MODULE = "scripts/mods/IconBrowser/icon_browser_view"
 local ICON_INDEX_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconIndex"
-local _icon_packages_loaded = false
+local _requested_icon_packages = {}
 
 local DEFAULT_WINDOW_SCALE = 100
 local DEFAULT_WINDOW_OFFSET_X = 0
@@ -240,22 +240,34 @@ local function _load_icon_index()
     return {}
 end
 
-local function _load_package_list(package_list)
+local function _package_is_available(package_name)
     local application = Application
-    local package_manager = Managers.package
 
-    for _, pkg in ipairs(package_list) do
-        if application.can_get_resource("package", pkg) then
-            package_manager:load(pkg, PACKAGE_REF, nil, true)
-        end
+    if not application or not application.can_get_resource then
+        return false
     end
+
+    local ok, exists = pcall(function()
+        return application.can_get_resource("package", package_name)
+    end)
+
+    return ok and exists or false
 end
 
-local function _ensure_icon_packages_loaded()
-    if _icon_packages_loaded then
-        return
+local function _package_is_loaded(package_name)
+    local managers = Managers
+    local package_manager = managers and managers.package
+
+    if not package_manager or not package_manager.has_loaded then
+        return false
     end
 
+    local ok, is_loaded = pcall(package_manager.has_loaded, package_manager, package_name)
+
+    return ok and is_loaded or false
+end
+
+local function _load_package_list(package_list)
     local managers = Managers
     local package_manager = managers and managers.package
 
@@ -263,10 +275,45 @@ local function _ensure_icon_packages_loaded()
         return
     end
 
+    for _, pkg in ipairs(package_list) do
+        if _package_is_available(pkg) and not _requested_icon_packages[pkg] then
+            if _package_is_loaded(pkg) then
+                _requested_icon_packages[pkg] = true
+            else
+                local ok = pcall(function()
+                    package_manager:load(pkg, PACKAGE_REF, nil, true)
+                end)
+
+                if ok then
+                    _requested_icon_packages[pkg] = true
+                end
+            end
+        end
+    end
+end
+
+local function _all_packages_loaded(package_list)
+    for _, pkg in ipairs(package_list) do
+        if _package_is_available(pkg) and not _package_is_loaded(pkg) then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function _ensure_icon_packages_loaded()
+    local managers = Managers
+    local package_manager = managers and managers.package
+
+    if not package_manager then
+        return false
+    end
+
     _load_package_list(ICON_BROWSER_PACKAGES)
     _load_package_list(ICON_BROWSER_LEVEL_PACKAGES)
 
-    _icon_packages_loaded = true
+    return _all_packages_loaded(ICON_BROWSER_PACKAGES) and _all_packages_loaded(ICON_BROWSER_LEVEL_PACKAGES)
 end
 
 local function _view_is_active()
@@ -373,29 +420,68 @@ function mod.mark_icon_render_failed(path, error_message)
     end
 end
 
-function mod.open_icon_browser(...)
-    _register_view()
-    _ensure_icon_packages_loaded()
-
+local function _open_icon_browser_view()
     local managers = Managers
     local ui_manager = managers and managers.ui
 
     if not ui_manager then
-        return
+        return false
     end
 
     if ui_manager:view_active(VIEW_NAME) then
         mod._icon_browser_view_open = true
-        return
+        return true
     end
 
     ui_manager:open_view(VIEW_NAME)
     mod._icon_browser_view_open = true
+
+    return true
+end
+
+function mod.on_all_mods_loaded()
+    _ensure_icon_packages_loaded()
+end
+
+function mod.update(dt)
+    if mod._pending_icon_browser_open and _ensure_icon_packages_loaded() then
+        mod._pending_icon_browser_open = false
+        mod._icon_browser_loading_notified = false
+        _open_icon_browser_view()
+    end
+end
+
+function mod.open_icon_browser(...)
+    _register_view()
+
+    if not _ensure_icon_packages_loaded() then
+        mod._pending_icon_browser_open = true
+
+        if not mod._icon_browser_loading_notified then
+            local message = "[IconBrowser] Loading icon packages..."
+            mod:echo(message)
+
+            if Mods and Mods.message and Mods.message.echo then
+                Mods.message.echo(message)
+            end
+
+            mod._icon_browser_loading_notified = true
+        end
+
+        return
+    end
+
+    mod._pending_icon_browser_open = false
+    mod._icon_browser_loading_notified = false
+    _open_icon_browser_view()
 end
 
 function mod.close_icon_browser(...)
     local managers = Managers
     local ui_manager = managers and managers.ui
+
+    mod._pending_icon_browser_open = false
+    mod._icon_browser_loading_notified = false
 
     if not ui_manager then
         return
@@ -409,7 +495,7 @@ function mod.close_icon_browser(...)
 end
 
 function mod.toggle_icon_browser(...)
-    if _view_is_active() or mod._icon_browser_view_open then
+    if _view_is_active() or mod._icon_browser_view_open or mod._pending_icon_browser_open then
         mod.close_icon_browser()
     else
         mod.open_icon_browser()

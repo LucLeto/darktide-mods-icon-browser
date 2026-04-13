@@ -177,6 +177,20 @@ local function _normalize_int(value, default_value, min_value, max_value)
     return _clamp(numeric_value, min_value, max_value)
 end
 
+local function _emit_user_message(message, prefer_notification)
+    mod:echo(message)
+
+    if not Mods or not Mods.message then
+        return
+    end
+
+    if prefer_notification and Mods.message.notify then
+        Mods.message.notify(message)
+    elseif Mods.message.echo then
+        Mods.message.echo(message)
+    end
+end
+
 local function _register_view_module_preload()
     local package_preload = package and package.preload
 
@@ -413,11 +427,44 @@ function mod.mark_icon_render_failed(path, error_message)
         message = format("%s (%s)", message, tostring(error_message))
     end
 
-    mod:echo(message)
+    _emit_user_message(message, false)
+end
 
-    if Mods and Mods.message and Mods.message.echo then
-        Mods.message.echo(message)
+function mod.copy_icon_path_to_clipboard(icon_id, path)
+    if type(path) ~= "string" or path == "" then
+        local message = "[IconBrowser] Unable to copy icon path."
+
+        _emit_user_message(message, true)
+
+        return false, "Copy failed"
     end
+
+    local clipboard = Clipboard
+    local clipboard_put = clipboard and clipboard.put
+
+    if type(clipboard_put) ~= "function" then
+        local message = format("[IconBrowser] Clipboard unavailable for #%d %s", icon_id or 0, path)
+
+        _emit_user_message(message, true)
+
+        return false, "Clipboard unavailable"
+    end
+
+    local ok, copied = pcall(clipboard_put, path)
+
+    if ok and copied ~= false then
+        local message = format("[IconBrowser] Copied #%d %s", icon_id or 0, path)
+
+        _emit_user_message(message, true)
+
+        return true, "Copied path to clipboard"
+    end
+
+    local message = format("[IconBrowser] Failed to copy #%d %s", icon_id or 0, path)
+
+    _emit_user_message(message, true)
+
+    return false, "Copy failed"
 end
 
 local function _open_icon_browser_view()
@@ -459,11 +506,7 @@ function mod.open_icon_browser(...)
 
         if not mod._icon_browser_loading_notified then
             local message = "[IconBrowser] Loading icon packages..."
-            mod:echo(message)
-
-            if Mods and Mods.message and Mods.message.echo then
-                Mods.message.echo(message)
-            end
+            _emit_user_message(message, false)
 
             mod._icon_browser_loading_notified = true
         end

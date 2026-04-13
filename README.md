@@ -14,7 +14,7 @@ Icon Browser opens an in-game browser window that lets you inspect a large index
 - its numeric ID inside the browser
 - the full material path
 
-When you click an entry, the mod echoes the selected icon in a developer-friendly format, for example:
+When you click an entry, the mod copies that icon path to your clipboard, shows an in-game confirmation, and echoes the selection in a developer-friendly format, for example:
 
 ```text
 [IconBrowser] #110 content/ui/materials/icons/abilities/frames/background
@@ -26,7 +26,9 @@ That makes it easier to find a usable icon path and copy it into your own mod.
 
 - In-game icon browser window for Darktide UI materials
 - Preview, ID, and full asset path shown in a single list
-- Click any row to print the icon ID and path to chat/log output
+- Click any row to copy the icon path to your clipboard
+- In-game confirmation when a path is copied
+- Chat/log output for copied icon IDs and paths
 - Default hotkey to open and close the browser: **F8**
 - Adjustable window size
 - Adjustable window X and Y position
@@ -51,8 +53,8 @@ If you are looking for a regular player-facing gameplay mod, this is probably **
 1. Open the browser in-game.
 2. Scroll through the indexed icons.
 3. Click an icon that looks suitable for your mod.
-4. Read the echoed ID and asset path.
-5. Use that material path in your own Lua/UI code.
+4. Paste the copied asset path into your own Lua/UI code.
+5. Use the echoed ID and path if you also want a quick log reference.
 
 ## Configuration
 
@@ -93,4 +95,4 @@ Finding a suitable icon for a Darktide mod can be slow when you do not know the 
 
 ## Summary
 
-**Icon Browser is a non-gameplay Darktide modding utility for browsing, previewing, and logging UI icon asset paths for use in other mods.**
+**Icon Browser is a non-gameplay Darktide modding utility for browsing, previewing, copying, and logging UI icon asset paths for use in other mods.**

@@ -11,7 +11,10 @@ local UIWorkspaceSettings = require("scripts/settings/ui/ui_workspace_settings")
 local clone = table.clone
 local max = math.max
 local floor = math.floor
-local format = string.format
+local COPY_STATUS_DURATION = 2
+local COPY_STATUS_FADE_DURATION = 0.25
+local COPY_STATUS_SUCCESS_COLOR = { 255, 120, 220, 140 }
+local COPY_STATUS_ERROR_COLOR = { 255, 255, 120, 120 }
 
 local function _clone(style)
     return clone(style)
@@ -50,6 +53,10 @@ local BASE_LAYOUT = {
         position = { 0, 0, 1 },
     },
     title_text = {
+        size = { 1420, 50 },
+        position = { 40, 10, 2 },
+    },
+    copy_status_text = {
         size = { 1420, 50 },
         position = { 40, 10, 2 },
     },
@@ -95,6 +102,14 @@ IconBrowserView.init = function(self, settings)
             position = clone(BASE_LAYOUT.title_text.position),
         },
 
+        copy_status_text = {
+            parent = "background",
+            horizontal_alignment = "left",
+            vertical_alignment = "top",
+            size = clone(BASE_LAYOUT.copy_status_text.size),
+            position = clone(BASE_LAYOUT.copy_status_text.position),
+        },
+
         table_header = {
             parent = "background",
             horizontal_alignment = "left",
@@ -132,6 +147,13 @@ IconBrowserView.init = function(self, settings)
     local title_style = _clone(UIFontSettings.header_1)
     title_style.text_horizontal_alignment = "left"
     title_style.horizontal_alignment = "left"
+    local copy_status_style = _clone(UIFontSettings.body_small or UIFontSettings.body)
+    copy_status_style.text_horizontal_alignment = "right"
+    copy_status_style.horizontal_alignment = "right"
+    copy_status_style.vertical_alignment = "center"
+    copy_status_style.text_vertical_alignment = "center"
+    copy_status_style.text_color = { 0, COPY_STATUS_SUCCESS_COLOR[2], COPY_STATUS_SUCCESS_COLOR[3],
+        COPY_STATUS_SUCCESS_COLOR[4] }
 
     local widget_definitions = {
         background = UIWidget.create_definition({
@@ -141,6 +163,10 @@ IconBrowserView.init = function(self, settings)
         title_text = UIWidget.create_definition({
             { value_id = "text", pass_type = "text", value = mod:localize("mod_name"), style = title_style },
         }, "title_text"),
+
+        copy_status_text = UIWidget.create_definition({
+            { value_id = "text", pass_type = "text", value = "", style = copy_status_style },
+        }, "copy_status_text"),
 
         table_header = UIWidget.create_definition({
             { pass_type = "rect", style = { color = { 180, 25, 25, 25 } } },
@@ -191,6 +217,7 @@ IconBrowserView.init = function(self, settings)
 
     self._base_title_font_size = (title_style and title_style.font_size) or 32
     self._base_header_font_size = (header_style and header_style.font_size) or 24
+    self._base_copy_status_font_size = (copy_status_style and copy_status_style.font_size) or 18
     self._row_height = BASE_LAYOUT.row_height
     self._icon_size = BASE_LAYOUT.icon_size
     self._id_column_x = BASE_LAYOUT.columns.id_x
@@ -199,6 +226,9 @@ IconBrowserView.init = function(self, settings)
     self._current_scale = nil
     self._current_offset_x = nil
     self._current_offset_y = nil
+    self._copy_status_message = ""
+    self._copy_status_is_error = false
+    self._copy_status_timer = 0
 end
 
 function IconBrowserView.on_enter(self)
@@ -206,6 +236,10 @@ function IconBrowserView.on_enter(self)
     mod._icon_browser_view_open = true
     self:_setup_input_legend()
     self:apply_layout_settings(true)
+    self._copy_status_message = ""
+    self._copy_status_is_error = false
+    self._copy_status_timer = 0
+    self:_update_copy_status_widget()
 end
 
 function IconBrowserView.on_exit(self)
@@ -221,6 +255,43 @@ end
 
 function IconBrowserView.cb_on_back_pressed(self)
     Managers.ui:close_view(VIEW_NAME)
+end
+
+function IconBrowserView._set_copy_status(self, message, is_error)
+    self._copy_status_message = message or ""
+    self._copy_status_is_error = is_error == true
+    self._copy_status_timer = (message and message ~= "") and COPY_STATUS_DURATION or 0
+    self:_update_copy_status_widget()
+end
+
+function IconBrowserView._update_copy_status_widget(self)
+    local widget = self._widgets_by_name.copy_status_text
+
+    if not widget or not widget.content or not widget.style or not widget.style.text then
+        return
+    end
+
+    local style = widget.style.text
+    local message = self._copy_status_message or ""
+    local timer = self._copy_status_timer or 0
+    local color = self._copy_status_is_error and COPY_STATUS_ERROR_COLOR or COPY_STATUS_SUCCESS_COLOR
+    local alpha = 0
+
+    if message ~= "" and timer > 0 then
+        alpha = 255
+
+        if timer < COPY_STATUS_FADE_DURATION then
+            alpha = floor(255 * (timer / COPY_STATUS_FADE_DURATION) + 0.5)
+        end
+    else
+        message = ""
+    end
+
+    widget.content.text = message
+    style.text_color[1] = alpha
+    style.text_color[2] = color[2]
+    style.text_color[3] = color[3]
+    style.text_color[4] = color[4]
 end
 
 function IconBrowserView._setup_input_legend(self)
@@ -292,16 +363,6 @@ local function _row_definition(row_height, icon_size, id_column_x, path_column_x
     }, "grid_content_pivot", nil, { grid_width, row_height })
 end
 
-local function _log_icon_selection(icon_id, path)
-    local message = format("[IconBrowser] #%d %s", icon_id, path)
-
-    mod:echo(message)
-
-    if Mods and Mods.message and Mods.message.echo then
-        Mods.message.echo(message)
-    end
-end
-
 function IconBrowserView._disable_icon_preview(self, widget, error_message)
     local content = widget and widget.content
 
@@ -343,7 +404,9 @@ function IconBrowserView._build_rows(self)
         end
 
         content.hotspot.pressed_callback = function()
-            _log_icon_selection(i, path)
+            local copied, status_message = mod.copy_icon_path_to_clipboard(i, path)
+
+            self:_set_copy_status(status_message, not copied)
         end
 
         widgets[i] = widget
@@ -367,6 +430,7 @@ function IconBrowserView._apply_scenegraph_layout(self, scale, offset_x, offset_
     local ui_scenegraph = self._ui_scenegraph
     local background = ui_scenegraph.background
     local title_text = ui_scenegraph.title_text
+    local copy_status_text = ui_scenegraph.copy_status_text
     local table_header = ui_scenegraph.table_header
     local grid_area = ui_scenegraph.grid_area
     local scrollbar = ui_scenegraph.scrollbar
@@ -380,6 +444,11 @@ function IconBrowserView._apply_scenegraph_layout(self, scale, offset_x, offset_
     title_text.size[2] = _scaled(BASE_LAYOUT.title_text.size[2], scale)
     title_text.position[1] = _scaled(BASE_LAYOUT.title_text.position[1], scale)
     title_text.position[2] = _scaled(BASE_LAYOUT.title_text.position[2], scale)
+
+    copy_status_text.size[1] = _scaled(BASE_LAYOUT.copy_status_text.size[1], scale)
+    copy_status_text.size[2] = _scaled(BASE_LAYOUT.copy_status_text.size[2], scale)
+    copy_status_text.position[1] = _scaled(BASE_LAYOUT.copy_status_text.position[1], scale)
+    copy_status_text.position[2] = _scaled(BASE_LAYOUT.copy_status_text.position[2], scale)
 
     table_header.size[1] = _scaled(BASE_LAYOUT.table_header.size[1], scale)
     table_header.size[2] = _scaled(BASE_LAYOUT.table_header.size[2], scale)
@@ -399,10 +468,15 @@ end
 
 function IconBrowserView._apply_widget_layout(self, scale)
     local title_widget = self._widgets_by_name.title_text
+    local copy_status_widget = self._widgets_by_name.copy_status_text
     local header_widget = self._widgets_by_name.table_header
 
     if title_widget and title_widget.style and title_widget.style.text and title_widget.style.text.font_size then
         title_widget.style.text.font_size = _scaled_font_size(self._base_title_font_size, scale, 14)
+    end
+
+    if copy_status_widget and copy_status_widget.style and copy_status_widget.style.text and copy_status_widget.style.text.font_size then
+        copy_status_widget.style.text.font_size = _scaled_font_size(self._base_copy_status_font_size, scale, 10)
     end
 
     if header_widget and header_widget.style then
@@ -481,6 +555,16 @@ function IconBrowserView.update(self, dt, t, input_service)
 
     if grid then
         grid:update(dt, t, input_service)
+    end
+
+    if self._copy_status_timer and self._copy_status_timer > 0 then
+        self._copy_status_timer = max(self._copy_status_timer - dt, 0)
+
+        if self._copy_status_timer == 0 then
+            self._copy_status_message = ""
+        end
+
+        self:_update_copy_status_widget()
     end
 end
 

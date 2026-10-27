@@ -4,6 +4,8 @@ local Views = require("scripts/ui/views/views")
 local floor = math.floor
 local sort = table.sort
 local format = string.format
+local table_insert = table.insert
+local table_remove = table.remove
 
 local VIEW_NAME = "icon_browser_view"
 local VIEW_PACKAGE = "packages/ui/views/system_view/system_view"
@@ -11,6 +13,9 @@ local PACKAGE_REF = "IconBrowser"
 local VIEW_MODULE = "IconBrowser/scripts/mods/IconBrowser/icon_browser_view"
 local ALT_VIEW_MODULE = "scripts/mods/IconBrowser/icon_browser_view"
 local ICON_INDEX_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconIndex"
+local ASSETS_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_assets"
+local QUERY_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_query"
+local LOCALIZATION_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_localization"
 local _requested_icon_packages = {}
 
 local DEFAULT_WINDOW_SCALE = 100
@@ -18,12 +23,30 @@ local DEFAULT_WINDOW_OFFSET_X = 0
 local DEFAULT_WINDOW_OFFSET_Y = 0
 local DEFAULT_MOVE_STEP = 10
 
+-- 100 % is the near-full-screen frame; larger saved values from the fixed-size window clamp to it.
 local MIN_WINDOW_SCALE = 50
-local MAX_WINDOW_SCALE = 200
+local MAX_WINDOW_SCALE = 100
 local MIN_WINDOW_POSITION = -12000
 local MAX_WINDOW_POSITION = 12000
 local MIN_MOVE_STEP = 1
 local MAX_MOVE_STEP = 200
+
+local DEFAULT_INSPECTOR_WIDTH = 28
+local MIN_INSPECTOR_WIDTH = 25
+local MAX_INSPECTOR_WIDTH = 40
+
+local FAVORITES_SETTING = "icon_browser_favorites"
+local RECENT_SETTING = "icon_browser_recent"
+local MAX_RECENT_ICONS = 30
+
+local DENSITIES = { compact = true, normal = true, large = true }
+local DEFAULT_DENSITY = "normal"
+local VIEW_MODES = { grid = true, list = true }
+local DEFAULT_VIEW_MODE = "grid"
+local PREVIEW_BACKGROUNDS = { dark = true, light = true, checker = true }
+local DEFAULT_PREVIEW_BACKGROUND = "dark"
+local DEFAULT_CATEGORY = "all"
+local DEFAULT_SORT = "index_asc"
 
 local ICON_BROWSER_PACKAGES = {
     -- Core menu and profile surfaces, broad UI atlas coverage
@@ -175,6 +198,30 @@ local function _normalize_int(value, default_value, min_value, max_value)
     local numeric_value = floor(tonumber(value) or default_value)
 
     return _clamp(numeric_value, min_value, max_value)
+end
+
+local function _bump_layout_revision()
+    mod._layout_revision = (mod._layout_revision or 0) + 1
+end
+
+local function _dofile_module(module_path)
+    if mod and mod.io_dofile then
+        return mod:io_dofile(module_path)
+    end
+
+    return require(module_path)
+end
+
+local function _load_module(module_path)
+    local ok, module = pcall(_dofile_module, module_path)
+
+    if ok and type(module) == "table" then
+        return module
+    end
+
+    mod:echo(format("[IconBrowser] Failed to load %s (%s)", module_path, tostring(module)))
+
+    return nil
 end
 
 local function _emit_user_message(message, prefer_notification)
@@ -357,6 +404,7 @@ end
 
 function mod.set_icon_browser_scale(new_value)
     mod:set("icon_browser_scale", _normalize_int(new_value, DEFAULT_WINDOW_SCALE, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE))
+    _bump_layout_revision()
 end
 
 function mod.set_icon_browser_position(new_x, new_y)
@@ -369,10 +417,101 @@ function mod.set_icon_browser_position(new_x, new_y)
         mod:set("icon_browser_pos_y",
             _normalize_int(new_y, DEFAULT_WINDOW_OFFSET_Y, MIN_WINDOW_POSITION, MAX_WINDOW_POSITION))
     end
+
+    _bump_layout_revision()
 end
 
 function mod.set_icon_browser_move_step(new_value)
     mod:set("icon_browser_move_step", _normalize_int(new_value, DEFAULT_MOVE_STEP, MIN_MOVE_STEP, MAX_MOVE_STEP))
+end
+
+function mod.get_icon_browser_inspector_width()
+    return _normalize_int(mod:get("icon_browser_inspector_width"), DEFAULT_INSPECTOR_WIDTH, MIN_INSPECTOR_WIDTH,
+        MAX_INSPECTOR_WIDTH)
+end
+
+function mod.get_icon_browser_density()
+    local density = mod:get("icon_browser_density")
+
+    return DENSITIES[density] and density or DEFAULT_DENSITY
+end
+
+function mod.set_icon_browser_density(density)
+    if DENSITIES[density] then
+        mod:set("icon_browser_density", density)
+        _bump_layout_revision()
+    end
+end
+
+function mod.get_icon_browser_view_mode()
+    local view_mode = mod:get("icon_browser_view_mode")
+
+    return VIEW_MODES[view_mode] and view_mode or DEFAULT_VIEW_MODE
+end
+
+function mod.set_icon_browser_view_mode(view_mode)
+    if VIEW_MODES[view_mode] then
+        mod:set("icon_browser_view_mode", view_mode)
+        _bump_layout_revision()
+    end
+end
+
+function mod.get_icon_browser_category()
+    local category = mod:get("icon_browser_category")
+    local assets = mod._assets
+
+    if type(category) == "string" and assets and assets.category_counts[category] then
+        return category
+    end
+
+    return DEFAULT_CATEGORY
+end
+
+function mod.set_icon_browser_category(category)
+    local assets = mod._assets
+
+    if type(category) == "string" and assets and assets.category_counts[category] then
+        mod:set("icon_browser_category", category)
+    end
+end
+
+function mod.get_icon_browser_sort()
+    local sort_id = mod:get("icon_browser_sort")
+    local query_module = mod._query_module
+
+    if query_module and query_module.is_valid_sort(sort_id) then
+        return sort_id
+    end
+
+    return DEFAULT_SORT
+end
+
+function mod.set_icon_browser_sort(sort_id)
+    local query_module = mod._query_module
+
+    if query_module and query_module.is_valid_sort(sort_id) then
+        mod:set("icon_browser_sort", sort_id)
+    end
+end
+
+function mod.get_icon_browser_preview_background()
+    local background = mod:get("icon_browser_preview_background")
+
+    return PREVIEW_BACKGROUNDS[background] and background or DEFAULT_PREVIEW_BACKGROUND
+end
+
+function mod.set_icon_browser_preview_background(background)
+    if PREVIEW_BACKGROUNDS[background] then
+        mod:set("icon_browser_preview_background", background)
+    end
+end
+
+function mod.is_icon_browser_double_click_copy_enabled()
+    return mod:get("icon_browser_double_click_copy") ~= false
+end
+
+function mod.is_icon_browser_copy_hotkey_enabled()
+    return mod:get("icon_browser_copy_hotkey") ~= false
 end
 
 function mod.move_icon_browser_left(...)
@@ -395,13 +534,202 @@ function mod.move_icon_browser_down(...)
     mod.set_icon_browser_position(nil, mod.get_icon_browser_offset_y() + move_step)
 end
 
+--- Reads a persisted path list into a dense array and a path lookup, dropping invalid and duplicate
+-- entries so a damaged setting can never produce a mixed table on the next save.
+local function _load_path_list(setting_id, limit)
+    local value = mod:get(setting_id)
+    local list = {}
+    local lookup = {}
+    local count = 0
+
+    if type(value) == "table" then
+        for i = 1, #value do
+            local path = value[i]
+
+            if type(path) == "string" and path ~= "" and not lookup[path] then
+                count = count + 1
+                list[count] = path
+                lookup[path] = true
+
+                if limit and count >= limit then
+                    break
+                end
+            end
+        end
+    end
+
+    return list, lookup, count
+end
+
+--- The fixed-size window allowed up to 200 %; 100 % is now the full-screen frame, so larger saved
+-- values are written back as 100 and the options slider shows the value actually used.
+local function _migrate_settings()
+    local scale = mod:get("icon_browser_scale")
+
+    if type(scale) == "number" and scale > MAX_WINDOW_SCALE then
+        mod:set("icon_browser_scale", MAX_WINDOW_SCALE)
+    end
+end
+
+local function _register_global_localization()
+    if not mod.add_global_localize_strings then
+        return
+    end
+
+    local ok, localization = pcall(_dofile_module, LOCALIZATION_MODULE)
+
+    if not ok or type(localization) ~= "table" then
+        return
+    end
+
+    mod:add_global_localize_strings({
+        loc_icon_browser_legend_select = localization.legend_select,
+        loc_icon_browser_legend_copy_path = localization.legend_copy_path,
+        loc_icon_browser_legend_favorite = localization.legend_favorite,
+    })
+end
+
 _register_view()
 mod._icon_paths = mod._icon_paths or _load_icon_index()
 mod._icon_browser_view_open = mod._icon_browser_view_open or false
 mod._icon_render_failures = mod._icon_render_failures or {}
+mod._layout_revision = mod._layout_revision or 0
+mod._icon_lists_revision = mod._icon_lists_revision or 0
+mod._icon_browser_session = mod._icon_browser_session or {
+    query = "",
+    selected_path = false,
+    favorites_only = false,
+    recent_only = false,
+}
+
+mod._assets_module = _load_module(ASSETS_MODULE)
+mod._query_module = _load_module(QUERY_MODULE)
+mod._assets = mod._assets_module and mod._assets_module.build(mod._icon_paths, mod)
+mod._favorite_icons, mod._favorite_lookup, mod._favorite_count = _load_path_list(FAVORITES_SETTING)
+mod._recent_icons, mod._recent_lookup, mod._recent_count = _load_path_list(RECENT_SETTING, MAX_RECENT_ICONS)
+_migrate_settings()
+_register_global_localization()
 
 function mod.get_icon_paths()
     return mod._icon_paths or {}
+end
+
+function mod.get_icon_assets()
+    return mod._assets
+end
+
+function mod.is_icon_favorite(path)
+    return mod._favorite_lookup[path] == true
+end
+
+--- Adds or removes a favorite by full path; returns whether the path is a favorite afterwards.
+function mod.toggle_icon_favorite(path)
+    if type(path) ~= "string" or path == "" then
+        return false
+    end
+
+    local list = mod._favorite_icons
+    local lookup = mod._favorite_lookup
+    local count = mod._favorite_count
+    local is_favorite
+
+    if lookup[path] then
+        for i = 1, count do
+            if list[i] == path then
+                table_remove(list, i)
+                break
+            end
+        end
+
+        lookup[path] = nil
+        mod._favorite_count = count - 1
+        is_favorite = false
+    else
+        count = count + 1
+        list[count] = path
+        lookup[path] = true
+        mod._favorite_count = count
+        is_favorite = true
+    end
+
+    mod:set(FAVORITES_SETTING, list)
+    mod._icon_lists_revision = mod._icon_lists_revision + 1
+    mod._icon_lists_dirty = true
+
+    return is_favorite
+end
+
+--- Moves a path to the front of the recent history, keeping at most `MAX_RECENT_ICONS` entries.
+function mod.record_recent_icon(path)
+    if type(path) ~= "string" or path == "" then
+        return
+    end
+
+    local list = mod._recent_icons
+
+    if list[1] == path then
+        return
+    end
+
+    local lookup = mod._recent_lookup
+    local count = mod._recent_count
+
+    if lookup[path] then
+        for i = 1, count do
+            if list[i] == path then
+                table_remove(list, i)
+                count = count - 1
+                break
+            end
+        end
+    end
+
+    table_insert(list, 1, path)
+    lookup[path] = true
+    count = count + 1
+
+    if count > MAX_RECENT_ICONS then
+        lookup[list[count]] = nil
+        list[count] = nil
+        count = MAX_RECENT_ICONS
+    end
+
+    mod._recent_count = count
+    mod:set(RECENT_SETTING, list)
+    mod._icon_lists_revision = mod._icon_lists_revision + 1
+    mod._icon_lists_dirty = true
+end
+
+function mod.clear_recent_icons()
+    local list = mod._recent_icons
+    local lookup = mod._recent_lookup
+
+    for i = mod._recent_count, 1, -1 do
+        lookup[list[i]] = nil
+        list[i] = nil
+    end
+
+    mod._recent_count = 0
+    mod:set(RECENT_SETTING, list)
+    mod._icon_lists_revision = mod._icon_lists_revision + 1
+    mod._icon_lists_dirty = true
+end
+
+--- DMF writes settings to disk only on game state changes; favorites and history changed in the
+-- browser are written when it closes, so a crash later in the session cannot lose them.
+function mod.save_icon_lists_if_dirty()
+    if not mod._icon_lists_dirty then
+        return
+    end
+
+    mod._icon_lists_dirty = false
+
+    local dmf = get_mod("DMF")
+    local save_settings = dmf and dmf.save_unsaved_settings_to_file
+
+    if type(save_settings) == "function" then
+        pcall(save_settings)
+    end
 end
 
 function mod.can_render_icon_path(path)
@@ -465,6 +793,41 @@ function mod.copy_icon_path_to_clipboard(icon_id, path)
     _emit_user_message(message, true)
 
     return false, "Copy failed"
+end
+
+--- Copies a value derived from an icon (filename, Lua string, UI snippet). The chat message names the
+-- copied format and the icon path instead of echoing a possibly multi-line value.
+function mod.copy_icon_text_to_clipboard(icon_id, text, format_label, path)
+    format_label = format_label or "value"
+    path = path or ""
+
+    if type(text) ~= "string" or text == "" then
+        _emit_user_message(format("[IconBrowser] Unable to copy %s.", format_label), true)
+
+        return false
+    end
+
+    local clipboard = Clipboard
+    local clipboard_put = clipboard and clipboard.put
+
+    if type(clipboard_put) ~= "function" then
+        _emit_user_message(format("[IconBrowser] Clipboard unavailable for %s of #%d %s", format_label, icon_id or 0,
+            path), true)
+
+        return false
+    end
+
+    local ok, copied = pcall(clipboard_put, text)
+
+    if ok and copied ~= false then
+        _emit_user_message(format("[IconBrowser] Copied %s of #%d %s", format_label, icon_id or 0, path), true)
+
+        return true
+    end
+
+    _emit_user_message(format("[IconBrowser] Failed to copy %s of #%d %s", format_label, icon_id or 0, path), true)
+
+    return false
 end
 
 local function _open_icon_browser_view()
@@ -546,6 +909,7 @@ function mod.toggle_icon_browser(...)
 end
 
 function mod.on_setting_changed(_setting_id)
+    _bump_layout_revision()
 end
 
 return mod

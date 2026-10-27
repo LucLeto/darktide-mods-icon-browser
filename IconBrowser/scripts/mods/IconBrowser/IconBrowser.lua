@@ -3,13 +3,21 @@
 -- `IconBrowser_localization.lua` are loaded by DMF from the same declaration.
 --
 -- Registers the `icon_browser_view` view (`icon_browser_view.lua`) through a `package.preload`
--- loader and loads the UI and level packages that carry the indexed icon materials through DMF's
+-- loader and loads the UI and level packages that carry the indexed icon materials, and every
+-- indexed material the game ships as a package of its own, through DMF's
 -- package manager (`mod:load_package`), which holds them under the mod's own reference and releases
 -- them when the mod unloads; `toggle_icon_browser`, bound to F8 by default, opens the view once
 -- they are loaded and closes it again. Loads the sorted icon index (`IconIndex.lua`) as
 -- `mod._icon_paths`, builds the asset model from it with `IconBrowser_assets.lua` as `mod._assets`
 -- and stores the search, filter and sort module `IconBrowser_query.lua` as `mod._query_module` for
--- the view.
+-- the view. The generated source references (`IconSources.lua`) are loaded with the first package
+-- request as `mod._icon_sources`, since they also name packages to load; both generated modules come
+-- from `tools/generate_icon_data.lua`. The chat command `/icon_browser_unloaded` copies the indexed
+-- paths whose material is not loaded, which are the icons that draw as white squares.
+--
+-- The minion portraits only ship in the enemy assets, one of the game's own global packages, which
+-- the game loads at its first loading screen. Opened in the main menu before that, the browser loads
+-- that package the way the game does, under the game's `global` reference instead of through DMF.
 --
 -- Requires DMF 26.10.22 or newer: the package manager, the `info.json` metadata (version and author
 -- in the Mod Options header) and the settings menu's tabs and button widgets are not available in
@@ -42,14 +50,17 @@ local VIEW_PACKAGE = "packages/ui/views/system_view/system_view"
 --- Module path of the view; `ALT_VIEW_MODULE` is the same file without the mod folder prefix.
 local VIEW_MODULE = "IconBrowser/scripts/mods/IconBrowser/icon_browser_view"
 local ALT_VIEW_MODULE = "scripts/mods/IconBrowser/icon_browser_view"
---- Module paths of the generated icon index, the asset model, the query module and the
--- localization table.
+--- Module paths of the generated icon index and source references, the asset model, the query
+-- module and the localization table.
 local ICON_INDEX_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconIndex"
+local ICON_SOURCES_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconSources"
 local ASSETS_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_assets"
 local QUERY_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_query"
 local LOCALIZATION_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_localization"
 --- `mod:package_status` value of a package DMF is still loading for the mod.
 local PACKAGE_STATUS_LOADING = "loading"
+--- Package names the game does not ship, so each name is checked with the engine only once.
+local _unavailable_packages = {}
 
 --- Defaults of the window settings.
 local DEFAULT_WINDOW_SCALE = 100
@@ -226,6 +237,15 @@ local ICON_BROWSER_LEVEL_PACKAGES = {
     "content/levels/ui/expedition/world",
 }
 
+--- Packages of the game's `GLOBAL_RESOURCES` that carry indexed icons; the enemy assets are the only
+-- package with the minion portraits. The game loads its global packages at the first loading screen
+-- and never releases them, so these are only requested before that, in the main menu.
+local GLOBAL_ICON_PACKAGES = {
+    "content/characters/enemy/enemy_character_assets",
+}
+--- Reference name the game's `StateLoading` loads its global packages under; it never releases it.
+local GLOBAL_PACKAGE_REFERENCE = "global"
+
 -- ----------------------------------------------------------------------------
 -- Helpers
 -- ----------------------------------------------------------------------------
@@ -397,14 +417,18 @@ end
 --- Asks DMF's package manager to load every package of a list that the game ships and that was not
 -- requested yet. DMF loads them asynchronously under the mod's own reference, so packages the game
 -- already loaded for one of its views stay loaded when that view releases them, and releases them
--- when the mod unloads.
+-- when the mod unloads. Names the game does not ship are remembered and never checked again.
 -- tab: package_list array of package names
 local function _load_package_list(package_list)
     for i = 1, #package_list do
         local package_name = package_list[i]
 
-        if mod:package_status(package_name) == nil and _package_is_available(package_name) then
-            mod:load_package(package_name)
+        if not _unavailable_packages[package_name] and mod:package_status(package_name) == nil then
+            if _package_is_available(package_name) then
+                mod:load_package(package_name)
+            else
+                _unavailable_packages[package_name] = true
+            end
         end
     end
 end
@@ -423,12 +447,89 @@ local function _all_packages_loaded(package_list)
 end
 
 --- Requests the icon packages and returns whether all of them are loaded.
+-- Besides the UI and level packages, this requests the packages `IconSources.lua` names (the views
+-- and HUD elements whose scripts use an indexed icon, and the UI asset packages) and every indexed
+-- material that the game ships as a package of its own: since 1.13 the game loads such materials
+-- (item HUD icons, notification artwork) only while it shows them, and a material that is not loaded
+-- draws as a white square.
 -- treturn: bool
 local function _ensure_icon_packages_loaded()
+    local icon_paths = mod._icon_paths or {}
+    local sources = mod.get_icon_sources()
+    local source_packages = sources and type(sources.packages) == "table" and sources.packages or {}
+
     _load_package_list(ICON_BROWSER_PACKAGES)
     _load_package_list(ICON_BROWSER_LEVEL_PACKAGES)
+    _load_package_list(source_packages)
+    _load_package_list(icon_paths)
 
     return _all_packages_loaded(ICON_BROWSER_PACKAGES) and _all_packages_loaded(ICON_BROWSER_LEVEL_PACKAGES)
+        and _all_packages_loaded(source_packages) and _all_packages_loaded(icon_paths)
+end
+
+--- Returns whether the game lists a package in its `GLOBAL_RESOURCES`.
+-- string: package_name package resource name
+-- treturn: bool
+local function _is_game_global_package(package_name)
+    local global_resources = GLOBAL_RESOURCES
+
+    if type(global_resources) ~= "table" then
+        return false
+    end
+
+    for i = 1, #global_resources do
+        if global_resources[i] == package_name then
+            return true
+        end
+    end
+
+    return false
+end
+
+--- Loads the global packages that carry indexed icons when the game has not loaded them yet, which
+-- is the case in the main menu before the first loading screen; otherwise does nothing.
+-- They are loaded exactly as the game's `StateLoading` loads them, under its `global` reference that
+-- nothing releases, so the package only arrives earlier. They must not go through DMF's package
+-- manager: the game skips a global package that is already loading or loaded and would then never
+-- add its own reference, so DMF releasing the mod's packages when the mod unloads would unload the
+-- enemy assets while the game still needs them. Packages the game no longer lists as global are left
+-- alone.
+local function _load_global_icon_packages()
+    local global_resources = GLOBAL_RESOURCES
+    local managers = Managers
+    local package_manager = managers and managers.package
+
+    if type(global_resources) ~= "table" or global_resources.loaded or not package_manager then
+        return
+    end
+
+    for i = 1, #GLOBAL_ICON_PACKAGES do
+        local package_name = GLOBAL_ICON_PACKAGES[i]
+
+        if _is_game_global_package(package_name) and not package_manager:is_loading(package_name)
+            and not package_manager:has_loaded(package_name) and _package_is_available(package_name) then
+            pcall(package_manager.load, package_manager, package_name, GLOBAL_PACKAGE_REFERENCE, nil, true)
+        end
+    end
+end
+
+--- Returns whether a global icon package is still loading, so icons it carries are not loaded yet.
+-- treturn: bool
+function mod.are_global_icon_packages_loading()
+    local managers = Managers
+    local package_manager = managers and managers.package
+
+    if not package_manager then
+        return false
+    end
+
+    for i = 1, #GLOBAL_ICON_PACKAGES do
+        if package_manager:is_loading(GLOBAL_ICON_PACKAGES[i]) then
+            return true
+        end
+    end
+
+    return false
 end
 
 --- Returns whether the UI manager reports the view as active.
@@ -738,6 +839,11 @@ mod._recent_icons, mod._recent_lookup, mod._recent_count = _load_path_list(RECEN
 _migrate_settings()
 _register_global_localization()
 
+-- `/icon_browser_unloaded` copies the icons that draw as white squares; defined further below.
+mod:command("icon_browser_unloaded", mod:localize("command_unloaded_description"), function()
+    mod.copy_unloaded_icon_paths()
+end)
+
 -- ----------------------------------------------------------------------------
 -- Assets, favorites and recent history
 -- ----------------------------------------------------------------------------
@@ -752,6 +858,17 @@ end
 -- treturn: ?tab
 function mod.get_icon_assets()
     return mod._assets
+end
+
+--- Returns the generated source references (`IconSources.lua`), loading them on first use, which
+-- is when the icon packages are first requested.
+-- treturn: ?tab nil when the module is missing or fails to load
+function mod.get_icon_sources()
+    if mod._icon_sources == nil then
+        mod._icon_sources = _load_module(ICON_SOURCES_MODULE) or false
+    end
+
+    return mod._icon_sources or nil
 end
 
 --- Returns whether a path is a favorite.
@@ -916,6 +1033,72 @@ function mod.can_render_icon_path(path)
     return type(path) == "string" and path ~= "" and not mod._icon_render_failures[path]
 end
 
+--- Returns whether the engine has a material loaded. A material that is not loaded raises no error
+-- but draws as a white square, so this is the only way to tell such an icon apart.
+-- string: path material path
+-- treturn: bool true as well when the engine cannot be asked, so nothing is hidden by mistake
+function mod.is_icon_material_loaded(path)
+    local application = Application
+
+    if not application or not application.can_get_resource then
+        return true
+    end
+
+    local ok, loaded = pcall(application.can_get_resource, "material", path)
+
+    return not ok or loaded == true
+end
+
+--- Copies every indexed path whose material is not loaded, one per line, and reports the count; these
+-- are the icons that draw as white squares. Run from the chat command `/icon_browser_unloaded` or the
+-- Unloaded Icons button in the Mod Options. Waits for the icon packages, including the global ones
+-- requested in the main menu, which would otherwise count as not loaded.
+function mod.copy_unloaded_icon_paths()
+    _load_global_icon_packages()
+
+    if not _ensure_icon_packages_loaded() or mod.are_global_icon_packages_loading() then
+        _emit_user_message("[IconBrowser] Icon packages are still loading; try again in a moment.", true)
+
+        return
+    end
+
+    local paths = mod._icon_paths or {}
+    local path_count = #paths
+    local unloaded = {}
+    local unloaded_count = 0
+
+    for i = 1, path_count do
+        local path = paths[i]
+
+        if not mod.is_icon_material_loaded(path) then
+            unloaded_count = unloaded_count + 1
+            unloaded[unloaded_count] = path
+        end
+    end
+
+    if unloaded_count == 0 then
+        _emit_user_message(format("[IconBrowser] All %d icons are loaded.", path_count), true)
+
+        return
+    end
+
+    local clipboard = Clipboard
+    local clipboard_put = clipboard and clipboard.put
+    local ok, copied = false, false
+
+    if type(clipboard_put) == "function" then
+        ok, copied = pcall(clipboard_put, table.concat(unloaded, "\n"))
+    end
+
+    if ok and copied ~= false then
+        _emit_user_message(format("[IconBrowser] Copied the paths of %d of %d icons that are not loaded.",
+            unloaded_count, path_count), true)
+    else
+        _emit_user_message(format("[IconBrowser] %d of %d icons are not loaded; the clipboard is unavailable.",
+            unloaded_count, path_count), true)
+    end
+end
+
 --- Records that a preview failed to draw and reports it once per path.
 -- string: path material path that failed
 -- ?param: error_message error raised by the draw
@@ -1064,9 +1247,12 @@ function mod.update(dt)
 end
 
 --- Opens the browser, or queues the opening and says so once while the icon packages still load.
+-- In the main menu this also requests the global icon packages; the browser does not wait for them
+-- and shows their icons as loading until they arrive.
 -- param: ... keybind arguments, unused
 function mod.open_icon_browser(...)
     _register_view()
+    _load_global_icon_packages()
 
     if not _ensure_icon_packages_loaded() then
         mod._pending_icon_browser_open = true

@@ -19,14 +19,20 @@
 -- name, else false; `name_origin` the definition the name came from as `source.key`, else false;
 -- `name_uses` how many further definitions use the same material;
 -- `category` category id of `CATEGORIES`; `category_label` its localized label;
--- `search_blob` lower-case path, the path with `_`, `-` and `/` read as spaces, the names and
--- `#id`, separated by `|`;
+-- `source_refs` the script lines naming the path (`scripts/...lua:line`), else false; `item_refs`
+-- the items using it as `hud_icon` (`{ item name, display name key }`), else false; `ref_count`
+-- both counted together; `usage_sizes` the sizes the game draws it at (`WxH`, most frequent first),
+-- else false; `usage_width`, `usage_height` the first of them, else 0; all from `attach_sources`;
+-- `search_extra` the lower-case script files and item names it is found under, else "";
+-- `search_blob` lower-case path, the path with `_`, `-` and `/` read as spaces, the names, `#id` and
+-- `search_extra`, separated by `|`;
 -- `lua_string`, `ui_snippet` the copy formats, built on first use, else false.
 --
 -- Loaded through `mod:io_dofile` by `IconBrowser.lua` and stored as `mod._assets_module`; the
 -- model built by `build` is stored as `mod._assets`.
 -- module: IconBrowser_assets
 -- author: LucLeto
+local concat = table.concat
 local find = string.find
 local format = string.format
 local gsub = string.gsub
@@ -37,6 +43,7 @@ local upper = string.upper
 local pairs = pairs
 local pcall = pcall
 local sort = table.sort
+local tonumber = tonumber
 local tostring = tostring
 local type = type
 
@@ -182,6 +189,7 @@ local function _search_blob(asset, localized_name, definition_name)
         .. "|" .. lower(localized_name or "")
         .. "|" .. lower(definition_name or "")
         .. "|" .. asset.id_text
+        .. "|" .. asset.search_extra
         .. "|"
 end
 
@@ -249,6 +257,13 @@ function Assets.build(paths, mod)
             name_uses = 0,
             category = category,
             category_label = category_labels[category],
+            source_refs = false,
+            item_refs = false,
+            ref_count = 0,
+            usage_sizes = false,
+            usage_width = 0,
+            usage_height = 0,
+            search_extra = "",
             search_blob = "",
             lua_string = false,
             ui_snippet = false,
@@ -270,7 +285,105 @@ function Assets.build(paths, mod)
         category_labels = category_labels,
         names_revision = 0,
         names_resolved = false,
+        sources_attached = false,
+        sources_game_version = false,
+        sources_items_version = false,
     }
+end
+
+-- ----------------------------------------------------------------------------
+-- Source references
+-- ----------------------------------------------------------------------------
+
+--- Adds the generated source references to the assets they name, once; safe to call repeatedly.
+-- Sets each named asset's `source_refs`, `item_refs`, `ref_count`, `usage_sizes`, `usage_width` and
+-- `usage_height`, and adds the script files (without line numbers) and item names to its search
+-- text, so an icon can be found by where the game uses it. Call it before `resolve_names`, which
+-- turns the items' display names into name candidates.
+-- tab: assets asset model built by `build`
+-- ?tab: sources the `IconSources.lua` table, nil when it could not be loaded
+-- treturn: int number of assets with references
+function Assets.attach_sources(assets, sources)
+    if assets.sources_attached or type(sources) ~= "table" or type(sources.materials) ~= "table" then
+        return 0
+    end
+
+    assets.sources_attached = true
+    assets.sources_game_version = sources.game_version or false
+    assets.sources_items_version = sources.items_version or false
+
+    local by_path = assets.by_path
+    local attached = 0
+
+    for path, entry in pairs(sources.materials) do
+        local asset = by_path[path]
+
+        if asset and type(entry) == "table" then
+            local refs = type(entry.refs) == "table" and entry.refs or false
+            local items = type(entry.items) == "table" and entry.items or false
+            local sizes = type(entry.sizes) == "table" and entry.sizes or false
+            local search_parts = {}
+            local seen_files = {}
+
+            if refs then
+                for i = 1, #refs do
+                    local file = match(refs[i], "^(.-):%d+$") or refs[i]
+
+                    if not seen_files[file] then
+                        seen_files[file] = true
+                        search_parts[#search_parts + 1] = lower(file)
+                    end
+                end
+            end
+
+            if items then
+                for i = 1, #items do
+                    search_parts[#search_parts + 1] = lower(tostring(items[i][1]))
+                end
+            end
+
+            if sizes and sizes[1] then
+                local width, height = match(sizes[1], "^(%d+)x(%d+)$")
+
+                asset.usage_width = tonumber(width) or 0
+                asset.usage_height = tonumber(height) or 0
+            end
+
+            asset.source_refs = refs
+            asset.item_refs = items
+            asset.ref_count = (refs and #refs or 0) + (items and #items or 0)
+            asset.usage_sizes = sizes
+            asset.search_extra = concat(search_parts, " ")
+            asset.search_blob = _search_blob(asset, nil, nil)
+            attached = attached + 1
+        end
+    end
+
+    return attached
+end
+
+--- Returns the asset's references as copyable text: one script line per line, then one
+-- `item <item name>` line per item.
+-- tab: asset asset record
+-- treturn: string empty when nothing references the asset
+function Assets.source_reference_text(asset)
+    local lines = {}
+    local refs = asset.source_refs
+    local items = asset.item_refs
+
+    if refs then
+        for i = 1, #refs do
+            lines[#lines + 1] = refs[i]
+        end
+    end
+
+    if items then
+        for i = 1, #items do
+            lines[#lines + 1] = "item " .. tostring(items[i][1])
+        end
+    end
+
+    return concat(lines, "\n")
 end
 
 -- ----------------------------------------------------------------------------
@@ -444,6 +557,9 @@ local function _localize_key(key)
     return nil
 end
 
+--- `_localize_key`, shared with the view for the item names in the inspector.
+Assets.localize_key = _localize_key
+
 --- Orders name candidates by `source.key`, so the chosen name does not depend on table order.
 -- tab: a candidate
 -- tab: b candidate
@@ -453,7 +569,8 @@ local function _compare_candidates(a, b)
 end
 
 --- Resolves verified names once; safe to call repeatedly.
--- Collects every definition naming an indexed material, takes the first candidate in `source.key`
+-- Collects every definition naming an indexed material, and every item that uses one as `hud_icon`
+-- (from `attach_sources`, as source `master_items`), takes the first candidate in `source.key`
 -- order whose key localizes, else the first candidate's humanized key, and rebuilds the named
 -- assets' sort and search fields. A failing game module or collector only loses its own names.
 -- Bumps `names_revision`, which tells the query module to rebuild its name-based orders.
@@ -499,6 +616,18 @@ function Assets.resolve_names(assets)
 
         if ok and type(data) == "table" then
             pcall(source.collect, data, add)
+        end
+    end
+
+    for path, asset in pairs(by_path) do
+        local items = asset.item_refs
+
+        if items then
+            for i = 1, #items do
+                local item_name = tostring(items[i][1])
+
+                add(path, items[i][2], "master_items", match(item_name, "([^/]+)$") or item_name)
+            end
         end
     end
 

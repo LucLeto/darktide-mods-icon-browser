@@ -3,8 +3,9 @@
 -- and ends just above the game's input legend, shrunk by the Window Size setting and moved by the
 -- offsets, which are clamped so it stays on screen. It holds a header with the title, status, asset
 -- count and toolbar (search field, category and sort menus, favorites and recent filters, grid/list
--- and density toggles), the asset browser and a persistent inspector with preview, metadata and
--- copy actions.
+-- and density toggles), the asset browser and a persistent inspector with preview, metadata, the
+-- asset's source references (the script lines and items that use it, and the size the game draws
+-- it at, which the preview's `auto` aspect follows) and copy actions.
 --
 -- The browser is virtualized: a pool of slot widgets covering the visible cells is rebuilt only when
 -- the slot geometry changes and rebound to the window of query results the scrollbar shows, with
@@ -15,8 +16,12 @@
 --
 -- Every widget that draws an indexed material (tiles, list rows, the inspector preview) is drawn
 -- inside `pcall`; a failing material is reported once through `mod.mark_icon_render_failed`, shown
--- with a fallback and stays selectable and copyable. Chrome widgets are drawn inside `pcall` as
--- well, so a missing shared material only hides that widget.
+-- with a fallback and stays selectable and copyable. A material the engine has not loaded raises no
+-- error but would draw as a white square, so it is not drawn and its fallback says so in red; while
+-- a global game package requested in the main menu still loads, the fallback says "loading" instead,
+-- and every state is checked again once it has loaded.
+-- Chrome widgets are drawn inside `pcall` as well, so a missing shared material only hides that
+-- widget.
 --
 -- Loaded through the `package.preload` loader that `IconBrowser.lua` registers for the view's
 -- module path, and returned as the `IconBrowserView` class. Reads the asset model from
@@ -41,6 +46,7 @@ local floor = math.floor
 local format = string.format
 local gmatch = string.gmatch
 local gsub = string.gsub
+local match = string.match
 local max = math.max
 local min = math.min
 local pcall = pcall
@@ -85,6 +91,8 @@ local CROP_SUFFIX = "..."
 --- Slack in UI units between the measured text and its box, so measuring and drawing can never
 -- disagree about a line fitting.
 local CROP_MARGIN = 4
+--- Usage sizes listed in the inspector's size line; the copied references hold every source.
+local MAX_METADATA_SIZES = 3
 
 --- Widths of the toolbar controls, in the order of `TOOLBAR_NODES`.
 local TOOLBAR_WIDTHS = {
@@ -117,6 +125,7 @@ local INSPECTOR_ACTION_WIDGETS = {
     "copy_filename_button",
     "copy_lua_button",
     "copy_snippet_button",
+    "copy_sources_button",
     "favorite_button",
 }
 
@@ -160,6 +169,28 @@ local function _clamp(value, min_value, max_value)
     end
 
     return value
+end
+
+--- Sets a slot's or the preview's fallback text: the regular "no preview" text for a loaded material,
+-- "loading" while a game package that may carry it still loads, both in the default colour, and
+-- "not available" in red for a material that is not loaded.
+-- tab: content widget content
+-- string: text_id content field of the fallback text
+-- tab: style fallback text style
+-- tab: texts `default`, `loading` and `not_loaded` texts
+-- bool: loaded whether the material is loaded
+-- bool: loading whether a game package that may carry it is still loading
+local function _set_fallback(content, text_id, style, texts, loaded, loading)
+    if loaded then
+        content[text_id] = texts.default
+        copy_color(style.default_color, style.text_color)
+    elseif loading then
+        content[text_id] = texts.loading
+        copy_color(style.default_color, style.text_color)
+    else
+        content[text_id] = texts.not_loaded
+        copy_color(PALETTE.status_error, style.text_color)
+    end
 end
 
 --- Keyboard indices cached by `_keyboard_keys_lookup`; nil until its first call.
@@ -250,6 +281,20 @@ IconBrowserView.init = function(self, settings)
     self._name_cache = {}
     self._category_cache = {}
     self._path_cache = {}
+    self._material_loaded = {}
+    self._global_packages_loading = false
+    self._fallback_texts = {
+        short = {
+            default = mod:localize("preview_unavailable_short"),
+            loading = mod:localize("preview_loading_short"),
+            not_loaded = mod:localize("preview_not_loaded_short"),
+        },
+        long = {
+            default = mod:localize("preview_unavailable"),
+            loading = mod:localize("preview_loading"),
+            not_loaded = mod:localize("preview_not_loaded"),
+        },
+    }
     self._list_columns = {
         preview_x = 0,
         preview_width = 0,
@@ -320,6 +365,7 @@ IconBrowserView.init = function(self, settings)
         filename = mod:localize("status_copied_filename"),
         lua_string = mod:localize("status_copied_lua_string"),
         ui_snippet = mod:localize("status_copied_ui_snippet"),
+        sources = mod:localize("status_copied_sources"),
         failed = mod:localize("status_copy_failed"),
         favorite_added = mod:localize("status_favorite_added"),
         favorite_removed = mod:localize("status_favorite_removed"),
@@ -332,7 +378,14 @@ IconBrowserView.init = function(self, settings)
         category = LABEL_TAG .. mod:localize("field_category") .. RESET_TAG .. "  ",
         name = LABEL_TAG .. mod:localize("field_name_source") .. RESET_TAG .. "  ",
         preview = LABEL_TAG .. mod:localize("field_preview") .. RESET_TAG .. "  ",
-        native_size = LABEL_TAG .. mod:localize("field_native_size") .. RESET_TAG .. "  ",
+        size = LABEL_TAG .. mod:localize("field_size") .. RESET_TAG .. "  ",
+        used_in = LABEL_TAG .. mod:localize("field_used_in") .. RESET_TAG .. "  ",
+        items = LABEL_TAG .. mod:localize("field_items") .. RESET_TAG .. "  ",
+    }
+    self._field_label_texts = {
+        size = mod:localize("field_size") .. "  ",
+        used_in = mod:localize("field_used_in") .. "  ",
+        items = mod:localize("field_items") .. "  ",
     }
 end
 
@@ -353,6 +406,8 @@ function IconBrowserView.on_enter(self)
     self:_setup_input_legend()
     self:_create_preview_widgets()
     self:_setup_callbacks()
+    self._global_packages_loading = mod.are_global_icon_packages_loading()
+    Assets.attach_sources(self._assets, mod.get_icon_sources())
     Assets.resolve_names(self._assets)
     self:_restore_state()
     self._entered_browser = true
@@ -497,6 +552,7 @@ function IconBrowserView._setup_callbacks(self)
     self:_bind_button("copy_filename_button", "cb_on_copy_pressed", "filename")
     self:_bind_button("copy_lua_button", "cb_on_copy_pressed", "lua_string")
     self:_bind_button("copy_snippet_button", "cb_on_copy_pressed", "ui_snippet")
+    self:_bind_button("copy_sources_button", "cb_on_copy_pressed", "sources")
     self:_bind_button("favorite_button", "cb_on_favorite_pressed")
 end
 
@@ -885,7 +941,8 @@ function IconBrowserView._layout_inspector(self, width, height)
     y = y + 2 + spacing
 
     local secondary_height = inspector.secondary_height
-    local second_row_y = height - padding - secondary_height
+    local third_row_y = height - padding - secondary_height
+    local second_row_y = third_row_y - spacing - secondary_height
     local first_row_y = second_row_y - spacing - secondary_height
     local primary_y = first_row_y - spacing - inspector.primary_height
     local half_width = floor((inner_width - spacing) / 2)
@@ -896,7 +953,8 @@ function IconBrowserView._layout_inspector(self, width, height)
     self:_place("copy_filename_button", padding, first_row_y, half_width, secondary_height)
     self:_place("copy_lua_button", right_x, first_row_y, right_width, secondary_height)
     self:_place("copy_snippet_button", padding, second_row_y, half_width, secondary_height)
-    self:_place("favorite_button", right_x, second_row_y, right_width, secondary_height)
+    self:_place("copy_sources_button", right_x, second_row_y, right_width, secondary_height)
+    self:_place("favorite_button", padding, third_row_y, inner_width, secondary_height)
 
     local preview_top = y
     local controls_height = inspector.controls_height
@@ -935,19 +993,28 @@ function IconBrowserView._layout_inspector(self, width, height)
 end
 
 --- Fits the preview icon to the chosen display aspect and lays out the checkerboard cells.
+-- With the `auto` aspect, the selected asset's usage size from the source references sets the
+-- aspect, and 1:1 stands in when the game draws it at no known size.
 function IconBrowserView._layout_preview(self)
     local layout = self._layout
     local width = layout.preview_width
     local height = layout.preview_height
     local aspect = ASPECTS[self._preview_aspect_index]
+    local aspect_width, aspect_height = aspect.width, aspect.height
+    local selected_asset = self._selected_asset
+
+    if aspect.auto and selected_asset and selected_asset.usage_width > 0 and selected_asset.usage_height > 0 then
+        aspect_width, aspect_height = selected_asset.usage_width, selected_asset.usage_height
+    end
+
     local available_width = max(1, width - 24)
     local available_height = max(1, height - 24)
     local icon_width = available_width
-    local icon_height = floor(icon_width * aspect.height / aspect.width)
+    local icon_height = floor(icon_width * aspect_height / aspect_width)
 
     if icon_height > available_height then
         icon_height = available_height
-        icon_width = floor(icon_height * aspect.width / aspect.height)
+        icon_width = floor(icon_height * aspect_width / aspect_height)
     end
 
     self:_place("preview_icon", 0, 0, max(1, icon_width), max(1, icon_height))
@@ -1457,8 +1524,40 @@ function IconBrowserView._cropped_text(self, cache, asset, text, style, max_widt
     return cropped
 end
 
+--- Returns whether an asset's material is loaded, asking the engine once per path while the view is
+-- open. A material that is not loaded draws as a white square, so it gets a red fallback instead.
+-- string: path material path
+-- treturn: bool
+function IconBrowserView._is_material_loaded(self, path)
+    local material_loaded = self._material_loaded
+    local loaded = material_loaded[path]
+
+    if loaded == nil then
+        loaded = mod.is_icon_material_loaded(path)
+        material_loaded[path] = loaded
+    end
+
+    return loaded
+end
+
+--- Forgets the cached material states and rebinds the slots and the inspector, once the global game
+-- packages requested in the main menu have loaded.
+function IconBrowserView._refresh_material_states(self)
+    local slots = self._slots
+
+    table_clear(self._material_loaded)
+
+    for k = 1, self._slot_count do
+        slots[k].content.asset = false
+    end
+
+    self._bind_dirty = true
+    self._inspector_dirty = true
+end
+
 --- Binds the visible window of the results to the slot pool. Strings are only written when a slot
--- shows a different asset; state flags are refreshed for every visible slot.
+-- shows a different asset; state flags are refreshed for every visible slot. A material that is not
+-- loaded is not drawn, since it would show as a white square; its slot shows a red fallback.
 function IconBrowserView._bind_slots(self)
     self._bind_dirty = false
 
@@ -1478,6 +1577,8 @@ function IconBrowserView._bind_slots(self)
     local is_grid = self._slot_kind == "grid"
     local first_style = slots[1].style
     local columns = self._list_columns
+    local fallback_texts = self._fallback_texts.short
+    local packages_loading = self._global_packages_loading
 
     for k = 1, slot_count do
         local widget = slots[k]
@@ -1488,13 +1589,16 @@ function IconBrowserView._bind_slots(self)
         if asset then
             if content.asset ~= asset then
                 local path = asset.path
-                local available = mod.can_render_icon_path(path)
+                local loaded = self:_is_material_loaded(path)
+                local available = loaded and mod.can_render_icon_path(path)
 
                 content.asset = asset
                 content.icon_source = path
                 content.icon_available = available
                 content.icon = available and path or ""
                 content.hotspot.double_click_timer = 0
+                _set_fallback(content, "fallback_text", widget.style.fallback, fallback_texts, loaded,
+                    packages_loading)
 
                 if is_grid then
                     local label_style = first_style.label
@@ -1585,7 +1689,7 @@ function IconBrowserView._move_focus(self, delta_x, delta_y)
 end
 
 --- Copies a format of the selected asset, records it in the recent history and shows the status.
--- string: copy_format `path`, `filename`, `lua_string` or `ui_snippet`
+-- string: copy_format `path`, `filename`, `lua_string`, `ui_snippet` or `sources`
 function IconBrowserView._copy_selected(self, copy_format)
     local asset = self._selected_asset
 
@@ -1601,6 +1705,9 @@ function IconBrowserView._copy_selected(self, copy_format)
         copied = mod.copy_icon_text_to_clipboard(asset.id, asset.filename, "filename", asset.path)
     elseif copy_format == "lua_string" then
         copied = mod.copy_icon_text_to_clipboard(asset.id, Assets.lua_string(asset), "Lua string", asset.path)
+    elseif copy_format == "sources" then
+        copied = mod.copy_icon_text_to_clipboard(asset.id, Assets.source_reference_text(asset), "source references",
+            asset.path)
     else
         copied = mod.copy_icon_text_to_clipboard(asset.id, Assets.ui_snippet(asset), "Lua UI snippet", asset.path)
     end
@@ -1890,7 +1997,7 @@ function IconBrowserView.cb_on_preview_aspect_pressed(self)
 end
 
 --- Pressed callback of the inspector's copy buttons.
--- string: copy_format `path`, `filename`, `lua_string` or `ui_snippet`
+-- string: copy_format `path`, `filename`, `lua_string`, `ui_snippet` or `sources`
 function IconBrowserView.cb_on_copy_pressed(self, copy_format)
     self:_copy_selected(copy_format)
 end
@@ -1974,7 +2081,7 @@ function IconBrowserView._refresh_preview_controls(self)
     local background = self._preview_background
     local zoom = ZOOM_LEVELS[self._preview_zoom_index]
     local aspect = ASPECTS[self._preview_aspect_index]
-    local zoom_text
+    local zoom_text, aspect_text
 
     if zoom == 1 then
         zoom_text = mod:localize("preview_zoom_fit")
@@ -1982,9 +2089,15 @@ function IconBrowserView._refresh_preview_controls(self)
         zoom_text = mod:localize("preview_zoom_format", zoom)
     end
 
+    if aspect.auto then
+        aspect_text = mod:localize("preview_aspect_auto")
+    else
+        aspect_text = mod:localize("preview_aspect_format", aspect.label)
+    end
+
     widgets_by_name.preview_background_button.content.text = upper(mod:localize("preview_background_" .. background))
     widgets_by_name.preview_zoom_button.content.text = upper(zoom_text)
-    widgets_by_name.preview_aspect_button.content.text = upper(mod:localize("preview_aspect_format", aspect.label))
+    widgets_by_name.preview_aspect_button.content.text = upper(aspect_text)
 
     local preview_widgets = self._preview_widgets
     local half = 0.5 / zoom
@@ -2037,16 +2150,19 @@ function IconBrowserView._append_path_lines(self, path, style, max_width, lines,
 end
 
 --- Builds the inspector's metadata text: the wrapped path, filename, browser ID, category, name
--- source, preview status and native size, with coloured labels.
+-- source, preview status, size and source references, with coloured labels. The preview status is
+-- red when the preview failed or the material is not loaded, and says "not loaded yet" while a global
+-- game package still loads.
 -- tab: asset selected asset
 -- bool: preview_available whether its preview may be drawn
+-- bool: material_loaded whether the engine has its material loaded
 -- treturn: string
-function IconBrowserView._build_metadata(self, asset, preview_available)
+function IconBrowserView._build_metadata(self, asset, preview_available, material_loaded)
     local labels = self._field_labels
     local lines = self._metadata_lines
     local style = self._widgets_by_name.inspector_metadata.style.text
     local count = 1
-    local name_text
+    local name_text, preview_text
 
     lines[1] = labels.path
     count = self:_append_path_lines(asset.path, style, self._layout.metadata_width, lines, count)
@@ -2063,16 +2179,92 @@ function IconBrowserView._build_metadata(self, asset, preview_available)
         name_text = name_text .. " " .. mod:localize("name_source_more_uses", asset.name_uses)
     end
 
+    if preview_available then
+        preview_text = mod:localize("preview_status_available")
+    elseif not material_loaded and self._global_packages_loading then
+        preview_text = mod:localize("preview_status_loading")
+    elseif not material_loaded then
+        preview_text = WARNING_TAG .. mod:localize("preview_status_not_loaded") .. RESET_TAG
+    else
+        preview_text = WARNING_TAG .. mod:localize("preview_status_failed") .. RESET_TAG
+    end
+
     lines[count + 1] = labels.filename .. asset.filename
     lines[count + 2] = labels.id .. asset.id_text
     lines[count + 3] = labels.category .. asset.category_label
     lines[count + 4] = labels.name .. name_text
-    lines[count + 5] = labels.preview .. (preview_available and mod:localize("preview_status_available")
-        or WARNING_TAG .. mod:localize("preview_status_failed") .. RESET_TAG)
-    lines[count + 6] = labels.native_size .. mod:localize("native_size_unknown")
-    count = count + 6
+    lines[count + 5] = labels.preview .. preview_text
+    lines[count + 6] = labels.size .. self:_fit_field("size", self:_size_text(asset), style)
+    lines[count + 7] = labels.used_in .. self:_fit_field("used_in", self:_used_in_text(asset), style)
+    count = count + 7
+
+    if asset.item_refs then
+        count = count + 1
+        lines[count] = labels.items .. self:_fit_field("items", self:_items_text(asset), style)
+    end
 
     return concat(lines, "\n", 1, count)
+end
+
+--- Crops a metadata value so that it and its label fit on one line of the metadata block.
+-- string: field key of the label in `_field_label_texts`
+-- string: value value text
+-- tab: style metadata text style
+-- treturn: string
+function IconBrowserView._fit_field(self, field, value, style)
+    local label_width = self:_text_width(self._field_label_texts[field], style) or 0
+
+    return self:_fit_text(value, style, self._layout.metadata_width - label_width, false)
+end
+
+--- Size line of the metadata: the sizes the game draws the asset at, or that none is known.
+-- tab: asset selected asset
+-- treturn: string
+function IconBrowserView._size_text(self, asset)
+    local sizes = asset.usage_sizes
+
+    if not sizes then
+        return mod:localize("size_unknown")
+    end
+
+    return mod:localize("size_drawn_at", concat(sizes, ", ", 1, min(#sizes, MAX_METADATA_SIZES)))
+end
+
+--- Used-in line of the metadata: the first script line naming the asset, with the count of the rest.
+-- tab: asset selected asset
+-- treturn: string
+function IconBrowserView._used_in_text(self, asset)
+    local refs = asset.source_refs
+
+    if not refs then
+        return mod:localize("used_in_none")
+    end
+
+    local text = match(refs[1], "([^/]+)$") or refs[1]
+    local more = #refs - 1
+
+    if more > 0 then
+        text = text .. " " .. mod:localize("more_format", more)
+    end
+
+    return text
+end
+
+--- Items line of the metadata: the first item using the asset as its HUD icon, by its localized name
+-- where the game has one, with the count of the others.
+-- tab: asset selected asset with `item_refs`
+-- treturn: string
+function IconBrowserView._items_text(self, asset)
+    local items = asset.item_refs
+    local item = items[1]
+    local text = Assets.localize_key(item[2]) or match(tostring(item[1]), "([^/]+)$") or tostring(item[1])
+    local more = #items - 1
+
+    if more > 0 then
+        text = text .. " " .. mod:localize("more_format", more)
+    end
+
+    return text
 end
 
 --- Fills the inspector from the selection; without one it shows the empty state and disables the
@@ -2110,17 +2302,27 @@ function IconBrowserView._refresh_inspector(self)
     end
 
     local path = asset.path
-    local available = mod.can_render_icon_path(path)
+    local loaded = self:_is_material_loaded(path)
+    local available = loaded and mod.can_render_icon_path(path)
 
     icon_content.icon_source = path
     icon_content.icon = available and path or ""
     icon_content.icon_available = available
     fallback_content.icon_available = available
+    _set_fallback(fallback_content, "text", preview_widgets.preview_fallback.style.text, self._fallback_texts.long,
+        loaded, self._global_packages_loading)
     widgets_by_name.inspector_title.content.text = asset.display_name
     widgets_by_name.inspector_subtitle.content.text = upper(asset.category_label)
     widgets_by_name.favorite_button.content.text = upper(mod:localize(mod.is_icon_favorite(path)
         and "action_favorite_remove" or "action_favorite_add"))
-    widgets_by_name.inspector_metadata.content.text = self:_build_metadata(asset, available)
+    widgets_by_name.inspector_metadata.content.text = self:_build_metadata(asset, available, loaded)
+    widgets_by_name.copy_sources_button.content.hotspot.disabled = asset.ref_count == 0
+
+    if ASPECTS[self._preview_aspect_index].auto then
+        self:_layout_preview()
+        self:_force_update_scenegraph()
+    end
+
     self:_refresh_preview_controls()
 end
 
@@ -2350,6 +2552,11 @@ function IconBrowserView.update(self, dt, t, input_service)
     self:_apply_layout(false)
     self:_update_search_focus()
     self:_sync_search_text()
+
+    if self._global_packages_loading and not mod.are_global_icon_packages_loading() then
+        self._global_packages_loading = false
+        self:_refresh_material_states()
+    end
 
     local lists_revision = mod._icon_lists_revision
 

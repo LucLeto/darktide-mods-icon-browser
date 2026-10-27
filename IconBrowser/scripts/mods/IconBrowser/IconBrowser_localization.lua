@@ -441,6 +441,26 @@ return {
         en = "Hold the button to remove every favorite. This cannot be undone.",
         de = "Halte den Knopf gedrückt, um alle Favoriten zu entfernen. Das kann nicht rückgängig gemacht werden.",
     },
+    copy_unloaded_icon_paths = {
+        en = "Unloaded Icons",
+        de = "Nicht geladene Icons",
+    },
+    copy_unloaded_button = {
+        en = "Copy Paths",
+        de = "Pfade kopieren",
+    },
+    copy_unloaded_tooltip = {
+        en = "Copies the paths of all indexed icons whose material is not loaded, one per line. "
+            .. "These are the icons that draw as white squares. Same as the chat command /icon_browser_unloaded.",
+        de = "Kopiert die Pfade aller indizierten Icons, deren Material nicht geladen ist, einen pro Zeile. "
+            .. "Das sind die Icons, die als weiße Quadrate gezeichnet werden. "
+            .. "Entspricht dem Chatbefehl /icon_browser_unloaded.",
+    },
+    command_unloaded_description = {
+        en = "Copies the paths of the icons whose material is not loaded (white squares) to the clipboard.",
+        de = "Kopiert die Pfade der Icons, deren Material nicht geladen ist (weiße Quadrate), "
+            .. "in die Zwischenablage.",
+    },
     reset_icon_browser_position = {
         en = "Window Position",
         de = "Fensterposition",
@@ -686,6 +706,22 @@ return {
         en = "NO PREVIEW",
         de = "KEINE VORSCHAU",
     },
+    preview_not_loaded = {
+        en = "Not available - the material is not loaded",
+        de = "Nicht verfügbar - das Material ist nicht geladen",
+    },
+    preview_not_loaded_short = {
+        en = "NOT AVAILABLE",
+        de = "NICHT VERFÜGBAR",
+    },
+    preview_loading = {
+        en = "Loading - waiting for a game package",
+        de = "Lädt - warte auf ein Spielpaket",
+    },
+    preview_loading_short = {
+        en = "LOADING...",
+        de = "LÄDT...",
+    },
 
     -- Inspector
     inspector_no_selection = {
@@ -716,9 +752,17 @@ return {
         en = "Preview",
         de = "Vorschau",
     },
-    field_native_size = {
-        en = "Native size",
-        de = "Native Größe",
+    field_size = {
+        en = "Size",
+        de = "Größe",
+    },
+    field_used_in = {
+        en = "Used in",
+        de = "Verwendet in",
+    },
+    field_items = {
+        en = "Items",
+        de = "Gegenstände",
     },
     name_source_localized = {
         en = "Localized (%s)",
@@ -744,9 +788,29 @@ return {
         en = "Failed to render - the path can still be copied",
         de = "Darstellung fehlgeschlagen - der Pfad kann trotzdem kopiert werden",
     },
-    native_size_unknown = {
-        en = "Not exposed by the engine (aspect assumed)",
-        de = "Von der Engine nicht geliefert (Format angenommen)",
+    preview_status_not_loaded = {
+        en = "Material not loaded - draws as a white square",
+        de = "Material nicht geladen - wird als weißes Quadrat gezeichnet",
+    },
+    preview_status_loading = {
+        en = "Not loaded yet - a game package is still loading",
+        de = "Noch nicht geladen - ein Spielpaket lädt noch",
+    },
+    size_unknown = {
+        en = "Not exposed by the engine",
+        de = "Von der Engine nicht geliefert",
+    },
+    size_drawn_at = {
+        en = "Drawn at %s by the game",
+        de = "Vom Spiel in %s gezeichnet",
+    },
+    used_in_none = {
+        en = "Not named in the game scripts",
+        de = "In den Spielskripten nicht genannt",
+    },
+    more_format = {
+        en = "(+%d more)",
+        de = "(+%d weitere)",
     },
     preview_background_dark = {
         en = "BG: Dark",
@@ -772,6 +836,10 @@ return {
         en = "Aspect: %s",
         de = "Format: %s",
     },
+    preview_aspect_auto = {
+        en = "Aspect: Auto",
+        de = "Format: Auto",
+    },
     action_copy_path = {
         en = "Copy Material Path",
         de = "Materialpfad kopieren",
@@ -787,6 +855,10 @@ return {
     action_copy_ui_snippet = {
         en = "Copy UI Snippet",
         de = "UI-Snippet kopieren",
+    },
+    action_copy_sources = {
+        en = "Copy Sources",
+        de = "Quellen kopieren",
     },
     action_favorite_add = {
         en = "Add Favorite",
@@ -813,6 +885,10 @@ return {
     status_copied_ui_snippet = {
         en = "Lua UI snippet copied",
         de = "Lua-UI-Snippet kopiert",
+    },
+    status_copied_sources = {
+        en = "Source references copied",
+        de = "Quellverweise kopiert",
     },
     status_copy_failed = {
         en = "Copy failed",

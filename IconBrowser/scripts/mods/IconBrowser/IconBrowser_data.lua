@@ -2,8 +2,9 @@
 -- The returned table names the mod, makes it togglable and declares two groups, which DMF shows as
 -- native tabs. `Browser`: the Open Icon Browser keybind (F8 by default, a global `function_call`
 -- keybind of `toggle_icon_browser`), Thumbnail Density, Inspector Width, Double-Click Copies Path,
--- C Key Copies Path, and two buttons that clear the recent history and, held to confirm, the
--- favorites. `Window`: the frame's Window Size, X and Y position, a button that centres it again,
+-- C Key Copies Path, two buttons that clear the recent history and, held to confirm, the favorites,
+-- and a button that copies the paths of the icons whose material is not loaded. `Window`: the
+-- frame's Window Size, X and Y position, a button that centres it again,
 -- the move step and four optional move keybinds.
 --
 -- Titles come from each `setting_id`, tooltips and button texts are localization ids that DMF
@@ -18,7 +19,8 @@
 -- author: LucLeto
 local mod = get_mod("IconBrowser")
 
---- The `Browser` tab: opening the browser, its layout, copy shortcuts and its saved lists.
+--- The `Browser` tab: opening the browser, its layout, copy shortcuts, its saved lists and the list of
+-- icons that are not loaded.
 local browser_widgets = {
     {
         setting_id = "open_icon_browser",
@@ -77,6 +79,13 @@ local browser_widgets = {
         button_hold_duration = 2,
         function_name = "clear_icon_browser_favorites",
         tooltip = "clear_favorites_tooltip",
+    },
+    {
+        setting_id = "copy_unloaded_icon_paths",
+        type = "button",
+        button_text = "copy_unloaded_button",
+        function_name = "copy_unloaded_icon_paths",
+        tooltip = "copy_unloaded_tooltip",
     },
 }
 

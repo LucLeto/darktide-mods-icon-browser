@@ -137,9 +137,10 @@ Definitions.LAYOUT = {
         subtitle_height = 22,
         spacing = 10,
         controls_height = 34,
-        metadata_min_height = 230,
-        primary_height = 56,
-        secondary_height = 40,
+        metadata_min_height = 250,
+        primary_height = 50,
+        secondary_height = 34,
+        secondary_rows = 3,
         preview_min_height = 120,
     },
 }
@@ -148,10 +149,13 @@ do
     local inspector = Definitions.LAYOUT.inspector
 
     --- Height the inspector needs with the smallest preview; the frame never gets shorter than this,
-    -- so the copy actions and the metadata are never clipped.
+    -- so the copy actions and the metadata are never clipped. The spacings are the one below the
+    -- divider, the three around the preview controls and the metadata, the one above the secondary
+    -- buttons and the ones between their rows.
     inspector.min_content_height = inspector.padding * 2 + inspector.title_height + inspector.subtitle_height + 8
-        + inspector.spacing * 6 + inspector.preview_min_height + inspector.controls_height
-        + inspector.metadata_min_height + inspector.primary_height + inspector.secondary_height * 2
+        + inspector.spacing * (4 + inspector.secondary_rows) + inspector.preview_min_height
+        + inspector.controls_height + inspector.metadata_min_height + inspector.primary_height
+        + inspector.secondary_height * inspector.secondary_rows
 end
 
 --- Thumbnail densities: grid tile target width, label font/height, list row height and font.
@@ -167,8 +171,10 @@ Definitions.PREVIEW_BACKGROUNDS = { "dark", "light", "checker" }
 Definitions.ZOOM_LEVELS = { 1, 2, 4 }
 
 --- Display aspects of the inspector preview. The engine exposes no native texture size, so the
--- aspect is the user's choice and the first entry is the labelled assumption.
+-- aspect is the user's choice. The first entry, `auto`, uses the size the game draws the asset at
+-- where the source references know one, and 1:1 otherwise.
 Definitions.ASPECTS = {
+    { label = "auto", auto = true, width = 1, height = 1 },
     { label = "1:1", width = 1, height = 1 },
     { label = "4:3", width = 4, height = 3 },
     { label = "16:9", width = 16, height = 9 },
@@ -593,6 +599,7 @@ function Definitions.create(upper)
         copy_filename_button = _node("inspector_panel", 3),
         copy_lua_button = _node("inspector_panel", 3),
         copy_snippet_button = _node("inspector_panel", 3),
+        copy_sources_button = _node("inspector_panel", 3),
         favorite_button = _node("inspector_panel", 3),
         status_bar = _node("frame", 2),
         hint_text = _node("status_bar", 1),
@@ -747,6 +754,9 @@ function Definitions.create(upper)
         copy_snippet_button = UIWidget.create_definition(ButtonPassTemplates.terminal_button_small,
             "copy_snippet_button", { text = upper(mod:localize("action_copy_ui_snippet")) }, nil,
             { text = { font_size = SECONDARY_BUTTON_FONT_SIZE } }),
+        copy_sources_button = UIWidget.create_definition(ButtonPassTemplates.terminal_button_small,
+            "copy_sources_button", { text = upper(mod:localize("action_copy_sources")) }, nil,
+            { text = { font_size = SECONDARY_BUTTON_FONT_SIZE } }),
         favorite_button = UIWidget.create_definition(ButtonPassTemplates.terminal_button_small, "favorite_button", {
             text = "",
         }, nil, { text = { font_size = SECONDARY_BUTTON_FONT_SIZE } }),
@@ -858,6 +868,7 @@ function Definitions.preview_widget_definitions()
         preview_fallback = UIWidget.create_definition({
             {
                 pass_type = "text",
+                style_id = "text",
                 value_id = "text",
                 value = mod:localize("preview_unavailable"),
                 style = fallback_style,
@@ -872,7 +883,8 @@ end
 -- ----------------------------------------------------------------------------
 
 --- Grid tile: centred preview box, short label, gold favorite marker, terminal frame and corners.
--- The view binds `content.icon`, `content.label` and the state flags `has_asset`, `icon_available`,
+-- The view binds `content.icon`, `content.label`, the fallback text and its colour (red while the
+-- material is not loaded) and the state flags `has_asset`, `icon_available`,
 -- `is_selected`, `is_focused` and `is_favorite`.
 -- number: width tile width in UI units
 -- number: height tile height in UI units

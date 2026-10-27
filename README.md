@@ -26,17 +26,19 @@ Selecting an asset never touches the clipboard. Copying is explicit: use **Copy 
 
 - Near-full-screen layout that adapts to resolution, aspect ratio (including ultrawide) and UI scale, and stays clear of the input legend
 - Terminal look taken from the game: dark green panels, olive frames, sage text and gold selection highlights
-- Case-insensitive search over the material path, filename, readable name, localized name and browser ID; multiple terms, partial matches, underscores and hyphens read as spaces
+- Case-insensitive search over the material path, filename, readable name, localized name, browser ID and the game scripts and items that use an icon; multiple terms, partial matches, underscores and hyphens read as spaces
 - Categories derived from the material path, from Abilities to Backgrounds; anything unmatched stays visible under Other
 - Sorting by name, resource path, category or browser index, ascending or descending; list column headers sort on click
 - Grid view with automatic columns and compact / normal / large thumbnails, and a compact list view; both share search, filters, sorting and selection
-- Inspector with a large preview (dark, light or checkerboard background, zoom, selectable display aspect), the full wrapped material path, filename, browser ID, category, name source and preview status
+- Inspector with a large preview (dark, light or checkerboard background, zoom, display aspect), the full wrapped material path, filename, browser ID, category, name source and preview status
+- Source references: where the game's scripts name an icon (`scripts/...lua:line`), which items use it as their HUD icon, and the size the game draws it at; the preview's Auto aspect follows that size, and **Copy Sources** copies every reference
 - Copy actions: material path, filename, Lua string and a ready-to-use Lua UI texture pass snippet
 - Favorites and a recent-assets history (selected or copied), both saved by full material path between sessions
-- Localized names where the game's own definitions name an icon (mission types, circumstances, currencies, difficulty levels, classes, item types, crafting recipes); other assets get a readable name derived from the filename
+- Localized names where the game's own definitions name an icon (mission types, circumstances, currencies, difficulty levels, classes, item types, crafting recipes, and the items that use an icon as their HUD icon, such as weapons); other assets get a readable name derived from the filename
 - Hover tooltip with the complete material path
 - Keyboard support: **Ctrl+F** search, arrow keys navigate, **Enter** selects, **Ctrl+C** / **C** copies the path, **F** toggles the favorite, **Esc** leaves the search field or closes the browser
 - Previews that fail to render show a fallback, are reported once, and stay searchable and copyable
+- Icons whose material is not loaded (they would draw as white squares) show **NOT AVAILABLE** in red instead, and the inspector's preview status says so; `/icon_browser_unloaded` copies the full list of them
 - Default hotkey to open and close the browser: **F8**
 - Broad UI package preloading to surface more icon and asset references from menus, HUD, inventory, crafting, vendors, missions, and related interfaces
 - Localized mod text for multiple languages
@@ -73,6 +75,7 @@ The Mod Options have two tabs.
 - **C Key Copies Path** (Ctrl+C always works)
 - **Recent History**: a button that clears the recent history
 - **Favorites**: a hold-to-confirm button that removes every favorite
+- **Unloaded Icons**: a button that copies the paths of every indexed icon whose material is not loaded, one per line
 
 **Window**
 
@@ -83,6 +86,10 @@ The Mod Options have two tabs.
 - **Move Window Left** / **Right** / **Up** / **Down** keybinds
 
 View mode, category, sort order and preview background are remembered automatically.
+
+## Chat command
+
+- `/icon_browser_unloaded` copies the paths of every indexed icon whose material is not loaded, one per line, and reports how many there are. These are the icons that draw as white squares. The command waits until the icon packages have loaded; run it again if it says they are still loading.
 
 ## Requirements
 
@@ -102,12 +109,23 @@ Vortex installation is also possible!
 ## Notes and limitations
 
 - Icon Browser is still **under development** and should be considered a work in progress.
-- Some icons and UI graphics are currently **not displayed correctly** or may fail to render as expected.
-- The engine does not expose a material's native texture size, so the inspector shows no dimensions; the preview assumes a square aspect, which you can change with the Aspect control.
+- Some icons and UI graphics are currently **not displayed correctly** or may fail to render as expected. A material that is not loaded would draw as a white square. Icon Browser loads the packages of the views and HUD elements whose scripts use an indexed icon, the UI asset packages, and every indexed material the game ships as a package of its own (such as item HUD icons). The minion portraits (`icons/portraits/minion_portraits/`) only ship in the game's global enemy assets, which the game itself loads at the first loading screen and keeps for the whole session. Opened in the main menu before that, Icon Browser loads that package the way the game does (under the game's own `global` reference, not through DMF, so it is never released while the game needs it); the portraits show **LOADING...** until it has arrived, and the first loading screen then skips it. Icons that are still not loaded, for example those the current game version no longer ships, show **NOT AVAILABLE** in red.
+- The engine does not expose a material's native texture size. The inspector shows the size the game draws an icon at where its scripts set one; otherwise the Auto aspect assumes a square, which you can change with the Aspect control.
+- Source references and the index are generated from a snapshot of the game scripts and the backend items (currently Darktide 1.13.4, items version 139617). Icons the game names only at runtime, such as the scanner maps, have no references.
 - Localized names exist only for icons the game's own definitions name; most assets show a name derived from their filename. The material path always stays the canonical identifier.
 - Icon Browser is focused on **UI icon materials and related UI assets**.
 - The browser works from an included index and loaded UI packages, so it is a targeted developer tool, not a full raw asset explorer for every game resource.
 - Some assets may depend on package availability or game-side loading behavior.
+
+## Regenerating the icon data
+
+`IconIndex.lua` and `IconSources.lua` are generated by `tools/generate_icon_data.lua` (LuaJIT). After a game update, run it from the repository root against a decompiled source checkout such as [Aussiemon/Darktide-Source-Code](https://github.com/Aussiemon/Darktide-Source-Code), optionally with a master items export for the item HUD icons:
+
+```text
+luajit tools/generate_icon_data.lua --source <Darktide-Source-Code> [--master-items <master_items_export_*.lua>]
+```
+
+The index only grows: paths of the previous index stay, so icons the game builds at runtime are never dropped. The master items export is read line by line and never executed. `IconSources.lua` also lists the packages to load: the packages of the views and HUD elements whose scripts name an indexed icon, and the game's UI asset packages.
 
 ## Why this exists
 

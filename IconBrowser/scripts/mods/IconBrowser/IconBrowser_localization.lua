@@ -1,9 +1,10 @@
 --- Icon Browser's DMF localization table.
 -- Returns a table from localization id to a table of texts by language code; DMF resolves
 -- `mod:localize(id)` against it and falls back to English for a missing language. The original
--- texts (mod name and description, list columns and the window settings) cover all twelve supported
--- languages; the texts added with the full-screen browser provide English and German. Holds the
--- setting titles, tooltips and dropdown options, the toolbar, category, sort, list, inspector,
+-- texts (mod name and description, list columns and the window settings) and the two settings tab
+-- titles cover all twelve supported languages; the other texts added with the full-screen browser
+-- provide English and German. Holds the setting titles, tooltips, dropdown options and button
+-- texts, which the settings menu references by id, the toolbar, category, sort, list, inspector,
 -- status and shortcut hint texts, and the input legend texts, which `IconBrowser.lua` also
 -- registers as global `loc_icon_browser_legend_*` keys for the game's input legend. Texts are
 -- passed through `string.format` by DMF, so a literal percent sign is written as `%%`;
@@ -383,6 +384,74 @@ return {
     copy_hotkey_tooltip = {
         en = "Pressing C copies the selected material path while the search field is not focused. Ctrl+C always works.",
         de = "C kopiert den Materialpfad der Auswahl, solange das Suchfeld nicht aktiv ist. Strg+C funktioniert immer.",
+    },
+
+    -- Settings tabs, in every language like the window settings they hold
+    icon_browser_group = {
+        en = "Browser",
+        de = "Browser",
+        fr = "Navigateur",
+        it = "Browser",
+        es = "Navegador",
+        pl = "Przeglądarka",
+        ["pt-br"] = "Navegador",
+        ["ru"] = "Браузер",
+        ja = "ブラウザー",
+        ko = "브라우저",
+        ["zh-cn"] = "浏览器",
+        ["zh-tw"] = "瀏覽器",
+    },
+    icon_browser_window_group = {
+        en = "Window",
+        de = "Fenster",
+        fr = "Fenêtre",
+        it = "Finestra",
+        es = "Ventana",
+        pl = "Okno",
+        ["pt-br"] = "Janela",
+        ["ru"] = "Окно",
+        ja = "ウィンドウ",
+        ko = "창",
+        ["zh-cn"] = "窗口",
+        ["zh-tw"] = "視窗",
+    },
+
+    -- Settings buttons
+    clear_icon_browser_recent = {
+        en = "Recent History",
+        de = "Verlauf",
+    },
+    clear_recent_button = {
+        en = "Clear",
+        de = "Leeren",
+    },
+    clear_recent_tooltip = {
+        en = "Empties the list of recently selected and copied assets shown by the Recent filter.",
+        de = "Leert die Liste der zuletzt ausgewählten und kopierten Assets, die der Verlauf-Filter zeigt.",
+    },
+    clear_icon_browser_favorites = {
+        en = "Favorites",
+        de = "Favoriten",
+    },
+    clear_favorites_button = {
+        en = "Hold to Clear",
+        de = "Halten zum Leeren",
+    },
+    clear_favorites_tooltip = {
+        en = "Hold the button to remove every favorite. This cannot be undone.",
+        de = "Halte den Knopf gedrückt, um alle Favoriten zu entfernen. Das kann nicht rückgängig gemacht werden.",
+    },
+    reset_icon_browser_position = {
+        en = "Window Position",
+        de = "Fensterposition",
+    },
+    reset_position_button = {
+        en = "Reset",
+        de = "Zurücksetzen",
+    },
+    reset_position_tooltip = {
+        en = "Centres the Icon Browser again by setting the X and Y position to 0.",
+        de = "Zentriert den Icon-Browser wieder, indem die X- und Y-Position auf 0 gesetzt werden.",
     },
 
     -- Input legend (registered as global localization keys)

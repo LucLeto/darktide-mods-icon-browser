@@ -3,11 +3,17 @@
 -- `IconBrowser_localization.lua` are loaded by DMF from the same declaration.
 --
 -- Registers the `icon_browser_view` view (`icon_browser_view.lua`) through a `package.preload`
--- loader and loads the UI and level packages that carry the indexed icon materials;
--- `toggle_icon_browser`, bound to F8 by default, opens the view once they are loaded and closes it
--- again. Loads the sorted icon index (`IconIndex.lua`) as `mod._icon_paths`, builds the asset model
--- from it with `IconBrowser_assets.lua` as `mod._assets` and stores the search, filter and sort
--- module `IconBrowser_query.lua` as `mod._query_module` for the view.
+-- loader and loads the UI and level packages that carry the indexed icon materials through DMF's
+-- package manager (`mod:load_package`), which holds them under the mod's own reference and releases
+-- them when the mod unloads; `toggle_icon_browser`, bound to F8 by default, opens the view once
+-- they are loaded and closes it again. Loads the sorted icon index (`IconIndex.lua`) as
+-- `mod._icon_paths`, builds the asset model from it with `IconBrowser_assets.lua` as `mod._assets`
+-- and stores the search, filter and sort module `IconBrowser_query.lua` as `mod._query_module` for
+-- the view.
+--
+-- Requires DMF 26.10.22 or newer: the package manager, the `info.json` metadata (version and author
+-- in the Mod Options header) and the settings menu's tabs and button widgets are not available in
+-- older releases.
 --
 -- Also owns everything the view keeps between openings: the clamped layout and display settings
 -- (every change bumps `mod._layout_revision`, which the open view compares each frame), the
@@ -33,8 +39,6 @@ local table_remove = table.remove
 local VIEW_NAME = "icon_browser_view"
 --- Package the view itself depends on.
 local VIEW_PACKAGE = "packages/ui/views/system_view/system_view"
---- Reference name the icon packages are loaded under.
-local PACKAGE_REF = "IconBrowser"
 --- Module path of the view; `ALT_VIEW_MODULE` is the same file without the mod folder prefix.
 local VIEW_MODULE = "IconBrowser/scripts/mods/IconBrowser/icon_browser_view"
 local ALT_VIEW_MODULE = "scripts/mods/IconBrowser/icon_browser_view"
@@ -44,8 +48,8 @@ local ICON_INDEX_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconIndex"
 local ASSETS_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_assets"
 local QUERY_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_query"
 local LOCALIZATION_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_localization"
---- Packages whose load was requested or found already loaded, by package name.
-local _requested_icon_packages = {}
+--- `mod:package_status` value of a package DMF is still loading for the mod.
+local PACKAGE_STATUS_LOADING = "loading"
 
 --- Defaults of the window settings.
 local DEFAULT_WINDOW_SCALE = 100
@@ -83,7 +87,8 @@ local DEFAULT_PREVIEW_BACKGROUND = "dark"
 local DEFAULT_CATEGORY = "all"
 local DEFAULT_SORT = "index_asc"
 
---- UI packages loaded so the indexed icon materials can be drawn; unavailable ones are skipped.
+--- UI packages loaded so the indexed icon materials can be drawn; packages the game does not ship
+-- are skipped, so the list may name packages of other game versions.
 local ICON_BROWSER_PACKAGES = {
     -- Core menu and profile surfaces, broad UI atlas coverage
     "packages/ui/views/main_menu_view/main_menu_view",
@@ -389,55 +394,27 @@ local function _package_is_available(package_name)
     return ok and exists or false
 end
 
---- Returns whether the package manager has finished loading a package.
--- string: package_name package resource name
--- treturn: bool
-local function _package_is_loaded(package_name)
-    local managers = Managers
-    local package_manager = managers and managers.package
-
-    if not package_manager or not package_manager.has_loaded then
-        return false
-    end
-
-    local ok, is_loaded = pcall(package_manager.has_loaded, package_manager, package_name)
-
-    return ok and is_loaded or false
-end
-
---- Requests an asynchronous load of every available package of a list that was not requested yet.
+--- Asks DMF's package manager to load every package of a list that the game ships and that was not
+-- requested yet. DMF loads them asynchronously under the mod's own reference, so packages the game
+-- already loaded for one of its views stay loaded when that view releases them, and releases them
+-- when the mod unloads.
 -- tab: package_list array of package names
 local function _load_package_list(package_list)
-    local managers = Managers
-    local package_manager = managers and managers.package
+    for i = 1, #package_list do
+        local package_name = package_list[i]
 
-    if not package_manager then
-        return
-    end
-
-    for _, pkg in ipairs(package_list) do
-        if _package_is_available(pkg) and not _requested_icon_packages[pkg] then
-            if _package_is_loaded(pkg) then
-                _requested_icon_packages[pkg] = true
-            else
-                local ok = pcall(function()
-                    package_manager:load(pkg, PACKAGE_REF, nil, true)
-                end)
-
-                if ok then
-                    _requested_icon_packages[pkg] = true
-                end
-            end
+        if mod:package_status(package_name) == nil and _package_is_available(package_name) then
+            mod:load_package(package_name)
         end
     end
 end
 
---- Returns whether every available package of a list has finished loading.
+--- Returns whether no package of a list is still loading; skipped packages have no status.
 -- tab: package_list array of package names
 -- treturn: bool
 local function _all_packages_loaded(package_list)
-    for _, pkg in ipairs(package_list) do
-        if _package_is_available(pkg) and not _package_is_loaded(pkg) then
+    for i = 1, #package_list do
+        if mod:package_status(package_list[i]) == PACKAGE_STATUS_LOADING then
             return false
         end
     end
@@ -448,13 +425,6 @@ end
 --- Requests the icon packages and returns whether all of them are loaded.
 -- treturn: bool
 local function _ensure_icon_packages_loaded()
-    local managers = Managers
-    local package_manager = managers and managers.package
-
-    if not package_manager then
-        return false
-    end
-
     _load_package_list(ICON_BROWSER_PACKAGES)
     _load_package_list(ICON_BROWSER_LEVEL_PACKAGES)
 
@@ -673,6 +643,11 @@ function mod.move_icon_browser_down(...)
     mod.set_icon_browser_position(nil, mod.get_icon_browser_offset_y() + move_step)
 end
 
+--- Function of the Reset Window Position button in the Mod Options; centres the frame again.
+function mod.reset_icon_browser_position()
+    mod.set_icon_browser_position(DEFAULT_WINDOW_OFFSET_X, DEFAULT_WINDOW_OFFSET_Y)
+end
+
 -- ----------------------------------------------------------------------------
 -- Startup
 -- ----------------------------------------------------------------------------
@@ -883,9 +858,38 @@ function mod.clear_recent_icons()
     mod._icon_lists_dirty = true
 end
 
+--- Removes every favorite and stores the empty list.
+function mod.clear_favorite_icons()
+    local list = mod._favorite_icons
+    local lookup = mod._favorite_lookup
+
+    for i = mod._favorite_count, 1, -1 do
+        lookup[list[i]] = nil
+        list[i] = nil
+    end
+
+    mod._favorite_count = 0
+    mod:set(FAVORITES_SETTING, list)
+    mod._icon_lists_revision = mod._icon_lists_revision + 1
+    mod._icon_lists_dirty = true
+end
+
+--- Function of the Clear Recent History button in the Mod Options; confirms it in chat.
+function mod.clear_icon_browser_recent()
+    mod.clear_recent_icons()
+    _emit_user_message("[IconBrowser] Recent history cleared.", true)
+end
+
+--- Function of the hold-to-confirm Clear Favorites button in the Mod Options; confirms it in chat.
+function mod.clear_icon_browser_favorites()
+    mod.clear_favorite_icons()
+    _emit_user_message("[IconBrowser] Favorites cleared.", true)
+end
+
 --- Writes the DMF settings file when favorites or the history changed since the last call.
--- DMF writes settings to disk only on game state changes; favorites and history changed in the
--- browser are written when it closes, so a crash later in the session cannot lose them.
+-- DMF writes settings to disk on game state changes, mod reloads and when its options menu closes;
+-- favorites and history changed in the browser are written when the browser closes, so a crash
+-- later in the session cannot lose them.
 function mod.save_icon_lists_if_dirty()
     if not mod._icon_lists_dirty then
         return

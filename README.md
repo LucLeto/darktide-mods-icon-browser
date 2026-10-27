@@ -62,26 +62,38 @@ If you are looking for a regular player-facing gameplay mod, this is probably **
 
 ## Configuration
 
-The mod includes configurable options for:
+The Mod Options have two tabs.
+
+**Browser**
 
 - **Open Icon Browser** keybind
-- **Window Size (%)**: 100% fills the screen above the input legend, smaller values shrink the frame
-- **Window X Position** / **Window Y Position**: offsets of the frame, always kept on screen
-- **Window Move Step**
-- **Move Window Left** / **Right** / **Up** / **Down** keybinds
-- **Inspector Width (%)**: 25-40% of the content area
 - **Thumbnail Density**: compact, normal or large (also switchable in the toolbar)
+- **Inspector Width (%)**: 25-40% of the content area
 - **Double-Click Copies Path**
 - **C Key Copies Path** (Ctrl+C always works)
+- **Recent History**: a button that clears the recent history
+- **Favorites**: a hold-to-confirm button that removes every favorite
+
+**Window**
+
+- **Window Size (%)**: 100% fills the screen above the input legend, smaller values shrink the frame
+- **Window X Position** / **Window Y Position**: offsets of the frame, always kept on screen
+- **Window Position**: a button that centres the frame again
+- **Window Move Step**
+- **Move Window Left** / **Right** / **Up** / **Down** keybinds
 
 View mode, category, sort order and preview background are remembered automatically.
+
+## Requirements
+
+- **Darktide Mod Framework (DMF) 26.10.22 or newer.** Icon Browser loads its icon packages through DMF's package manager, provides its version and author through `info.json`, and uses the settings tabs and button widgets of current DMF releases. Older DMF versions cannot load it.
 
 ## Installation
 
 Install it like a standard **Darktide Mod Framework (DMF)** mod:
 
 1. Place the `IconBrowser` folder in your Darktide `mods` directory.
-2. Make sure DMF is installed and working.
+2. Make sure DMF 26.10.22 or newer is installed and working.
 3. Enable the mod in your mod list.
 4. Launch the game and use **F8** to open the browser.
 

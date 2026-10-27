@@ -385,6 +385,26 @@ return {
         en = "Pressing C copies the selected material path while the search field is not focused. Ctrl+C always works.",
         de = "C kopiert den Materialpfad der Auswahl, solange das Suchfeld nicht aktiv ist. Strg+C funktioniert immer.",
     },
+    icon_browser_snippet_format = {
+        en = "UI Snippet Format",
+        de = "UI-Snippet-Format",
+    },
+    snippet_format_pass = {
+        en = "Texture Pass",
+        de = "Texture-Pass",
+    },
+    snippet_format_widget = {
+        en = "Widget Definition",
+        de = "Widget-Definition",
+    },
+    snippet_format_tooltip = {
+        en = "What Copy UI Snippet copies: a texture pass for UIWidget.create_definition, or a scenegraph node "
+            .. "with a widget definition that draws the icon in it. Both use the size the game draws the icon at "
+            .. "where it is known.",
+        de = "Was UI-Snippet kopieren kopiert: einen Texture-Pass für UIWidget.create_definition oder einen "
+            .. "Scenegraph-Knoten mit einer Widget-Definition, die das Icon darin zeichnet. Beide nutzen die Größe, "
+            .. "in der das Spiel das Icon zeichnet, sofern bekannt.",
+    },
 
     -- Settings tabs, in every language like the window settings they hold
     icon_browser_group = {
@@ -945,6 +965,10 @@ return {
     status_copied_ui_snippet = {
         en = "Lua UI snippet copied",
         de = "Lua-UI-Snippet kopiert",
+    },
+    status_copied_widget_definition = {
+        en = "Lua widget definition copied",
+        de = "Lua-Widget-Definition kopiert",
     },
     status_copied_sources = {
         en = "Source references copied",

@@ -32,7 +32,7 @@ Selecting an asset never touches the clipboard. Copying is explicit: use **Copy 
 - Grid view with automatic columns and compact / normal / large thumbnails, and a compact list view; both share search, filters, sorting and selection
 - Inspector with a large preview (dark, light or checkerboard background, zoom, display aspect), the full wrapped material path, filename, browser ID, category, name source and preview status
 - Source references: where the game's scripts name an icon (`scripts/...lua:line`), which items use it as their HUD icon, and the size the game draws it at; the preview's Auto aspect follows that size, and **Copy Sources** copies every reference
-- Copy actions: material path, filename, Lua string and a ready-to-use Lua UI texture pass snippet
+- Copy actions: material path, filename, Lua string and a ready-to-use Lua UI snippet: a texture pass for `UIWidget.create_definition`, or a scenegraph node with a widget definition that draws the icon in it (see **UI Snippet Format**); both are sized to the size the game draws the icon at where it is known
 - **Show Related** in the inspector lists an asset's family (variants such as `credits_big` / `credits_small` or `_01` to `_05`), its folder, the same filename in other folders and every game script that uses it, each with its count; picking one filters the browser to those assets
 - Search filters, also written by **Show Related** and combinable with search terms: `in:icons/currencies/` (folder and subfolders), `family:icons/currencies/credits`, `filename:credits_big` and `file:wallet_settings.lua`
 - Multi-selection: **Ctrl+click** adds or removes an asset, **Shift+click** selects a range (**Ctrl+Shift+click** adds one), **Ctrl+A** selects every listed asset; the inspector then lists the selection and copies all paths (one per line), all filenames, a Lua array of the paths or a Lua table keyed by filename, and adds or removes all favorites at once
@@ -76,6 +76,7 @@ The Mod Options have two tabs.
 - **Inspector Width (%)**: 25-40% of the content area
 - **Double-Click Copies Path**
 - **C Key Copies Path** (Ctrl+C always works)
+- **UI Snippet Format**: what **Copy UI Snippet** copies, a texture pass or a scenegraph node with a widget definition
 - **Recent History**: a button that clears the recent history
 - **Favorites**: a hold-to-confirm button that removes every favorite
 - **Unloaded Icons**: a button that copies the paths of every indexed icon whose material is not loaded, one per line

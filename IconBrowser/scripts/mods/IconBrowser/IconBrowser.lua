@@ -97,6 +97,8 @@ local PREVIEW_BACKGROUNDS = { dark = true, light = true, checker = true }
 local DEFAULT_PREVIEW_BACKGROUND = "dark"
 local DEFAULT_CATEGORY = "all"
 local DEFAULT_SORT = "index_asc"
+local SNIPPET_FORMATS = { pass = true, widget = true }
+local DEFAULT_SNIPPET_FORMAT = "pass"
 
 --- UI packages loaded so the indexed icon materials can be drawn; packages the game does not ship
 -- are skipped, so the list may name packages of other game versions.
@@ -712,6 +714,15 @@ end
 -- treturn: bool
 function mod.is_icon_browser_copy_hotkey_enabled()
     return mod:get("icon_browser_copy_hotkey") ~= false
+end
+
+--- Returns the format Copy UI Snippet copies, `pass` (a texture pass) or `widget` (a scenegraph node
+-- and a widget definition).
+-- treturn: string
+function mod.get_icon_browser_snippet_format()
+    local snippet_format = mod:get("icon_browser_snippet_format")
+
+    return SNIPPET_FORMATS[snippet_format] and snippet_format or DEFAULT_SNIPPET_FORMAT
 end
 
 --- DMF keybind function that moves the frame left by the move step.

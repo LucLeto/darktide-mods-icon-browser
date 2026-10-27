@@ -32,7 +32,8 @@
 -- `search_extra` the lower-case script files and item names it is found under, else "";
 -- `search_blob` lower-case path, the path with `_`, `-` and `/` read as spaces, the names, `#id` and
 -- `search_extra`, separated by `|`;
--- `lua_string`, `ui_snippet` the copy formats, built on first use, else false.
+-- `lua_string`, `ui_snippet` the copy formats, built on first use, else false. Several selected
+-- assets are copied with `field_lines`, `lua_array` and `lua_table`.
 --
 -- Loaded through `mod:io_dofile` by `IconBrowser.lua` and stored as `mod._assets_module`; the
 -- model built by `build` is stored as `mod._assets`.
@@ -761,6 +762,81 @@ function Assets.ui_snippet(asset)
     end
 
     return text
+end
+
+--- Lua keywords, which cannot be bare table keys.
+local LUA_KEYWORDS = {
+    ["and"] = true, ["break"] = true, ["do"] = true, ["else"] = true, ["elseif"] = true, ["end"] = true,
+    ["false"] = true, ["for"] = true, ["function"] = true, ["goto"] = true, ["if"] = true, ["in"] = true,
+    ["local"] = true, ["nil"] = true, ["not"] = true, ["or"] = true, ["repeat"] = true, ["return"] = true,
+    ["then"] = true, ["true"] = true, ["until"] = true, ["while"] = true,
+}
+
+--- Returns one field of several assets, one per line, in the given order.
+-- tab: list array of asset records
+-- int: count number of assets in `list`
+-- string: field `path` or `filename`
+-- treturn: string
+function Assets.field_lines(list, count, field)
+    local lines = {}
+
+    for i = 1, count do
+        lines[i] = list[i][field]
+    end
+
+    return concat(lines, "\n", 1, count)
+end
+
+--- Returns the paths of several assets as a Lua array, in the given order.
+-- tab: list array of asset records
+-- int: count number of assets in `list`
+-- treturn: string
+function Assets.lua_array(list, count)
+    local lines = { "{" }
+
+    for i = 1, count do
+        lines[i + 1] = '    "' .. list[i].path .. '",'
+    end
+
+    lines[count + 2] = "}"
+
+    return concat(lines, "\n", 1, count + 2)
+end
+
+--- Returns the paths of several assets as a Lua table keyed by filename, in the given order. A
+-- filename that occurs more than once in the list is keyed by its path below `content/ui/materials/`
+-- instead, and keys that are not plain identifiers are written as `["key"]`.
+-- tab: list array of asset records
+-- int: count number of assets in `list`
+-- treturn: string
+function Assets.lua_table(list, count)
+    local filename_counts = {}
+    local lines = { "{" }
+
+    for i = 1, count do
+        local filename = list[i].filename
+
+        filename_counts[filename] = (filename_counts[filename] or 0) + 1
+    end
+
+    for i = 1, count do
+        local asset = list[i]
+        local key = asset.filename
+
+        if filename_counts[key] > 1 then
+            key = asset.directory ~= "" and asset.directory .. "/" .. key or key
+        end
+
+        if not find(key, "^[%a_][%w_]*$") or LUA_KEYWORDS[key] then
+            key = '["' .. key .. '"]'
+        end
+
+        lines[i + 1] = "    " .. key .. ' = "' .. asset.path .. '",'
+    end
+
+    lines[count + 2] = "}"
+
+    return concat(lines, "\n", 1, count + 2)
 end
 
 return Assets

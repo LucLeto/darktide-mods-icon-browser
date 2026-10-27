@@ -35,10 +35,11 @@ Selecting an asset never touches the clipboard. Copying is explicit: use **Copy 
 - Copy actions: material path, filename, Lua string and a ready-to-use Lua UI texture pass snippet
 - **Show Related** in the inspector lists an asset's family (variants such as `credits_big` / `credits_small` or `_01` to `_05`), its folder, the same filename in other folders and every game script that uses it, each with its count; picking one filters the browser to those assets
 - Search filters, also written by **Show Related** and combinable with search terms: `in:icons/currencies/` (folder and subfolders), `family:icons/currencies/credits`, `filename:credits_big` and `file:wallet_settings.lua`
+- Multi-selection: **Ctrl+click** adds or removes an asset, **Shift+click** selects a range (**Ctrl+Shift+click** adds one), **Ctrl+A** selects every listed asset; the inspector then lists the selection and copies all paths (one per line), all filenames, a Lua array of the paths or a Lua table keyed by filename, and adds or removes all favorites at once
 - Favorites and a recent-assets history (selected or copied), both saved by full material path between sessions
 - Localized names where the game's own definitions name an icon (mission types, circumstances, currencies, difficulty levels, classes, item types, crafting recipes, and the items that use an icon as their HUD icon, such as weapons); other assets get a readable name derived from the filename
 - Hover tooltip with the complete material path
-- Keyboard support: **Ctrl+F** search, arrow keys navigate, **Enter** selects, **Ctrl+C** / **C** copies the path, **F** toggles the favorite, **Esc** leaves the search field or closes the browser
+- Keyboard support: **Ctrl+F** search, arrow keys navigate, **Enter** selects, **Ctrl+A** selects all listed assets, **Ctrl+C** / **C** copies the path (all paths of a multi-selection), **F** toggles the favorite, **Esc** leaves the search field, reduces a multi-selection to one asset, or closes the browser
 - Previews that fail to render show a fallback, are reported once, and stay searchable and copyable
 - Icons whose material is not loaded (they would draw as white squares) show **NOT AVAILABLE** in red instead, and the inspector's preview status says so; `/icon_browser_unloaded` copies the full list of them
 - Default hotkey to open and close the browser: **F8**

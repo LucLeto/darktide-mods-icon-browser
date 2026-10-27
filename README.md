@@ -16,7 +16,7 @@ Icon Browser opens a full-screen, Darktide-styled asset explorer for a large ind
 
 The workflow is: **open the browser, search or browse, select an asset, inspect it, copy the reference you need.**
 
-Selecting an asset never touches the clipboard. Copying is explicit: use **Copy Material Path**, double-click an asset, or press **Ctrl+C** / **C**. Every copy shows an in-game confirmation and echoes a developer-friendly line, for example:
+Selecting an asset never touches the clipboard. Copying is explicit: use **Copy Material Path**, double-click an asset, or press **Ctrl+C** / **C**. Every copy shows one in-game notification with a developer-friendly line, which DMF also writes to the log (or wherever your DMF logging settings send notifications), for example:
 
 ```text
 [IconBrowser] Copied #110 content/ui/materials/icons/abilities/frames/background

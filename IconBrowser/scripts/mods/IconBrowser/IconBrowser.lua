@@ -27,7 +27,7 @@
 -- (every change bumps `mod._layout_revision`, which the open view compares each frame), the
 -- favorites and the recent history (dense path arrays in DMF settings, with lookups and a revision
 -- counter), the render failures of icon previews, the session state the view restores, and the
--- clipboard actions with their chat confirmations.
+-- clipboard actions with their confirmations, each shown once as a DMF notification.
 -- module: IconBrowser
 -- author: LucLeto
 local mod = get_mod("IconBrowser")
@@ -308,20 +308,17 @@ local function _load_module(module_path)
     return nil
 end
 
---- Echoes a message to the chat and, when the Mods message API exists, also shows it in game.
+--- Shows a message once through DMF's logging, as a notification (`mod:notify`) or as a chat echo
+-- (`mod:echo`). Where it appears follows the player's DMF logging settings: by default a
+-- notification also goes to the log, and an echo to the chat and the log. The message is passed as
+-- a `%s` argument, as DMF formats its first argument.
 -- string: message text to show
 -- ?bool: prefer_notification show it as a notification instead of a chat echo
 local function _emit_user_message(message, prefer_notification)
-    mod:echo(message)
-
-    if not Mods or not Mods.message then
-        return
-    end
-
-    if prefer_notification and Mods.message.notify then
-        Mods.message.notify(message)
-    elseif Mods.message.echo then
-        Mods.message.echo(message)
+    if prefer_notification then
+        mod:notify("%s", message)
+    else
+        mod:echo("%s", message)
     end
 end
 
@@ -1058,13 +1055,14 @@ function mod.clear_favorite_icons()
     mod._icon_lists_dirty = true
 end
 
---- Function of the Clear Recent History button in the Mod Options; confirms it in chat.
+--- Function of the Clear Recent History button in the Mod Options; confirms it as a notification.
 function mod.clear_icon_browser_recent()
     mod.clear_recent_icons()
     _emit_user_message("[IconBrowser] Recent history cleared.", true)
 end
 
---- Function of the hold-to-confirm Clear Favorites button in the Mod Options; confirms it in chat.
+--- Function of the hold-to-confirm Clear Favorites button in the Mod Options; confirms it as a
+-- notification.
 function mod.clear_icon_browser_favorites()
     mod.clear_favorite_icons()
     _emit_user_message("[IconBrowser] Favorites cleared.", true)
@@ -1191,7 +1189,7 @@ function mod.mark_icon_render_failed(path, error_message)
     _emit_user_message(message, false)
 end
 
---- Copies a material path to the clipboard and confirms it in chat and as a notification.
+--- Copies a material path to the clipboard and confirms it as a notification.
 -- ?int: icon_id browser ID shown in the message
 -- string: path material path to copy
 -- treturn: bool whether the path was copied

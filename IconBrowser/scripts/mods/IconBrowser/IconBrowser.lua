@@ -172,8 +172,6 @@ local ICON_BROWSER_PACKAGES = {
     "packages/ui/views/havoc_reward_presentation_view/havoc_reward_presentation_view",
     "packages/ui/views/havoc_play_view/havoc_play_view",
     "packages/ui/views/havoc_background_view/havoc_background_view",
-    "packages/ui/views/expedition_play_view/expedition_play_view",
-    "packages/ui/views/expedition_background_view/expedition_background_view",
     "packages/ui/views/expedition_view/expedition_view",
     "packages/ui/views/horde_play_view/horde_play_view",
     "packages/ui/views/training_grounds_options_view/training_grounds_options_view",

@@ -868,6 +868,30 @@ return {
         en = "Remove Favorite",
         de = "Favorit entfernen",
     },
+    action_related = {
+        en = "Show Related",
+        de = "Verwandte zeigen",
+    },
+    related_family = {
+        en = "Same family: %s",
+        de = "Gleiche Familie: %s",
+    },
+    related_folder = {
+        en = "Same folder: %s",
+        de = "Gleicher Ordner: %s",
+    },
+    related_filename = {
+        en = "Same filename: %s",
+        de = "Gleicher Dateiname: %s",
+    },
+    related_file = {
+        en = "Used in %s",
+        de = "Verwendet in %s",
+    },
+    related_none = {
+        en = "No related assets",
+        de = "Keine verwandten Assets",
+    },
 
     -- Status messages
     status_copied_path = {

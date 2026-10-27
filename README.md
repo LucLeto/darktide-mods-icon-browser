@@ -33,6 +33,8 @@ Selecting an asset never touches the clipboard. Copying is explicit: use **Copy 
 - Inspector with a large preview (dark, light or checkerboard background, zoom, display aspect), the full wrapped material path, filename, browser ID, category, name source and preview status
 - Source references: where the game's scripts name an icon (`scripts/...lua:line`), which items use it as their HUD icon, and the size the game draws it at; the preview's Auto aspect follows that size, and **Copy Sources** copies every reference
 - Copy actions: material path, filename, Lua string and a ready-to-use Lua UI texture pass snippet
+- **Show Related** in the inspector lists an asset's family (variants such as `credits_big` / `credits_small` or `_01` to `_05`), its folder, the same filename in other folders and every game script that uses it, each with its count; picking one filters the browser to those assets
+- Search filters, also written by **Show Related** and combinable with search terms: `in:icons/currencies/` (folder and subfolders), `family:icons/currencies/credits`, `filename:credits_big` and `file:wallet_settings.lua`
 - Favorites and a recent-assets history (selected or copied), both saved by full material path between sessions
 - Localized names where the game's own definitions name an icon (mission types, circumstances, currencies, difficulty levels, classes, item types, crafting recipes, and the items that use an icon as their HUD icon, such as weapons); other assets get a readable name derived from the filename
 - Hover tooltip with the complete material path

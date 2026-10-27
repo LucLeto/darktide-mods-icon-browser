@@ -5,7 +5,9 @@
 -- count and toolbar (search field, category and sort menus, favorites and recent filters, grid/list
 -- and density toggles), the asset browser and a persistent inspector with preview, metadata, the
 -- asset's source references (the script lines and items that use it, and the size the game draws
--- it at, which the preview's `auto` aspect follows) and copy actions.
+-- it at, which the preview's `auto` aspect follows) and copy actions. Its Related menu lists the
+-- asset's family, folder, filename twins and the scripts naming it, with counts, and applies the chosen
+-- one as an `in:`, `family:`, `filename:` or `file:` filter in the search field.
 --
 -- The browser is virtualized: a pool of slot widgets covering the visible cells is rebuilt only when
 -- the slot geometry changes and rebound to the window of query results the scrollbar shows, with
@@ -127,7 +129,15 @@ local INSPECTOR_ACTION_WIDGETS = {
     "copy_snippet_button",
     "copy_sources_button",
     "favorite_button",
+    "related_button",
 }
+
+--- Script files listed in the Related menu at most, and the menu's width range in UI units.
+local MAX_RELATED_FILES = 6
+local RELATED_MIN_WIDTH = 320
+local RELATED_MAX_WIDTH = 640
+--- Empty favorites and recent lookups for counting relations without those filters.
+local EMPTY_LOOKUP = {}
 
 --- Widgets of the list column header, shown only in the list view.
 local LIST_HEADER_WIDGETS = {
@@ -336,9 +346,13 @@ IconBrowserView.init = function(self, settings)
 
     self._open_popup = nil
     self._swallow_input = false
-    self._popup_options = { category = {}, sort = {} }
-    self._popup_option_counts = { category = 0, sort = 0 }
-    self._popup_widths = { category = 0, sort = 0 }
+    self._popup_options = { category = {}, sort = {}, related = {} }
+    self._popup_option_counts = { category = 0, sort = 0, related = 0 }
+    self._popup_widths = { category = 0, sort = 0, related = 0 }
+    self._related_tokens = {}
+    self._related_state = Query.new_state()
+    self._related_results = {}
+    self._related_result_count = 0
 
     self._preview_widgets = {}
     self._preview_background = "dark"
@@ -554,6 +568,7 @@ function IconBrowserView._setup_callbacks(self)
     self:_bind_button("copy_snippet_button", "cb_on_copy_pressed", "ui_snippet")
     self:_bind_button("copy_sources_button", "cb_on_copy_pressed", "sources")
     self:_bind_button("favorite_button", "cb_on_favorite_pressed")
+    self:_bind_button("related_button", "cb_on_related_pressed")
 end
 
 --- Restores the persisted filter preferences and the session's search text and selection.
@@ -954,7 +969,8 @@ function IconBrowserView._layout_inspector(self, width, height)
     self:_place("copy_lua_button", right_x, first_row_y, right_width, secondary_height)
     self:_place("copy_snippet_button", padding, second_row_y, half_width, secondary_height)
     self:_place("copy_sources_button", right_x, second_row_y, right_width, secondary_height)
-    self:_place("favorite_button", padding, third_row_y, inner_width, secondary_height)
+    self:_place("favorite_button", padding, third_row_y, half_width, secondary_height)
+    self:_place("related_button", right_x, third_row_y, right_width, secondary_height)
 
     local preview_top = y
     local controls_height = inspector.controls_height
@@ -1045,24 +1061,32 @@ end
 -- Popup menus
 -- ----------------------------------------------------------------------------
 
---- Destroys the option widgets of both popup menus.
-function IconBrowserView._destroy_popup_options(self)
+--- Destroys the option widgets of one popup menu.
+-- string: popup_id `category`, `sort` or `related`
+function IconBrowserView._destroy_popup_menu_options(self, popup_id)
     local ui_renderer = self._ui_renderer
+    local options = self._popup_options[popup_id]
 
-    for popup_id, options in pairs(self._popup_options) do
-        for i = 1, self._popup_option_counts[popup_id] do
-            UIWidget.destroy(ui_renderer, options[i])
-            options[i] = nil
-        end
+    for i = 1, self._popup_option_counts[popup_id] do
+        UIWidget.destroy(ui_renderer, options[i])
+        options[i] = nil
+    end
 
-        self._popup_option_counts[popup_id] = 0
+    self._popup_option_counts[popup_id] = 0
+end
+
+--- Destroys the option widgets of every popup menu.
+function IconBrowserView._destroy_popup_options(self)
+    for popup_id in pairs(self._popup_options) do
+        self:_destroy_popup_menu_options(popup_id)
     end
 end
 
 --- Builds the options of the category menu, each labelled with its asset count, and of the sort
--- menu, at least as wide as their toolbar buttons.
+-- menu, at least as wide as their toolbar buttons. The Related menu is built when it opens.
 function IconBrowserView._build_popup_options(self)
-    self:_destroy_popup_options()
+    self:_destroy_popup_menu_options("category")
+    self:_destroy_popup_menu_options("sort")
 
     local option_height = LAYOUT.popup_option_height
     local assets = self._assets
@@ -1110,18 +1134,140 @@ function IconBrowserView._build_popup_options(self)
     self._popup_widths.sort = sort_width
 end
 
---- Opens a popup menu below its toolbar button; leaves the search field and closes any other menu
--- and the tooltip first.
--- string: popup_id `category` or `sort`
+--- Returns how many assets a search filter shows, counted without the category, favorites and recent
+-- filters, as applying it from the Related menu switches those off.
+-- string: token `kind:value` filter from `Query.filter_token`
+-- treturn: int
+function IconBrowserView._relation_size(self, token)
+    local state = self._related_state
+
+    Query.set_text(state, token)
+
+    local count = Query.run(state, self._assets, self._query_cache, EMPTY_LOOKUP, EMPTY_LOOKUP, self._related_results,
+        self._related_result_count)
+
+    self._related_result_count = count
+
+    return count
+end
+
+--- Adds an entry to the Related menu when its filter shows more than the asset itself.
+-- tab: labels array the entry's label is added to
+-- int: count entries so far
+-- string: token `kind:value` filter the entry applies
+-- string: text_id localization id of the label, formatted with `value`
+-- string: value shown value
+-- treturn: int entries afterwards
+function IconBrowserView._add_relation(self, labels, count, token, text_id, value)
+    local size = self:_relation_size(token)
+
+    if size < 2 then
+        return count
+    end
+
+    count = count + 1
+    self._related_tokens[count] = token
+    labels[count] = format("%s  (%d)", mod:localize(text_id, value), size)
+
+    return count
+end
+
+--- Builds the Related menu of an asset: its family, its folder (with subfolders), the same filename
+-- in other folders, and each game script that names it, each with its asset count. An asset without
+-- relatives gets a single entry that says so and does nothing.
+-- tab: asset selected asset
+function IconBrowserView._build_related_options(self, asset)
+    self:_destroy_popup_menu_options("related")
+
+    local tokens = self._related_tokens
+    local labels = {}
+    local count = 0
+
+    table_clear(tokens)
+
+    if asset.family_size > 1 then
+        count = self:_add_relation(labels, count, Query.filter_token("family", asset.family), "related_family",
+            match(asset.family, "([^/]+)$") or asset.family)
+    end
+
+    if asset.directory ~= "" then
+        count = self:_add_relation(labels, count, Query.filter_token("in", asset.directory), "related_folder",
+            asset.directory)
+    end
+
+    if asset.filename_count > 1 then
+        count = self:_add_relation(labels, count, Query.filter_token("filename", asset.filename), "related_filename",
+            asset.filename)
+    end
+
+    local files = asset.ref_files
+
+    if files then
+        for i = 1, min(#files, MAX_RELATED_FILES) do
+            local file_name = match(files[i], "([^/]+)$") or files[i]
+
+            count = self:_add_relation(labels, count, Query.filter_token("file", file_name), "related_file", file_name)
+        end
+    end
+
+    if count == 0 then
+        count = 1
+        labels[1] = mod:localize("related_none")
+    end
+
+    local option_height = LAYOUT.popup_option_height
+    local text_style = Definitions.option_definition(RELATED_MAX_WIDTH, option_height).style.text
+    local width = RELATED_MIN_WIDTH
+
+    for i = 1, count do
+        width = max(width, (self:_text_width(labels[i], text_style) or 0) + 32 + CROP_MARGIN * 2)
+    end
+
+    width = min(floor(width), RELATED_MAX_WIDTH, self._layout.frame_width - LAYOUT.padding * 2)
+
+    local definition = Definitions.option_definition(width, option_height)
+    local options = self._popup_options.related
+
+    for i = 1, count do
+        local widget = UIWidget.init("related_option_" .. i, definition)
+        local content = widget.content
+
+        widget.offset[2] = 6 + (i - 1) * option_height
+        content.text = self:_fit_text(labels[i], widget.style.text, width - 32, false)
+        content.option_id = i
+        content.is_selected = false
+        content.hotspot.pressed_callback = callback(self, "cb_on_related_option_pressed", i)
+        options[i] = widget
+    end
+
+    self._popup_option_counts.related = count
+    self._popup_widths.related = width
+end
+
+--- Opens a popup menu below its toolbar button, or the Related menu above the inspector's Related
+-- button; leaves the search field and closes any other menu and the tooltip first.
+-- string: popup_id `category`, `sort` or `related`
 function IconBrowserView._open_popup_menu(self, popup_id)
     self:_stop_search_input()
     self:_close_popup()
 
-    local button_node = self._ui_scenegraph[popup_id .. "_button"]
+    local ui_scenegraph = self._ui_scenegraph
+    local button_node = ui_scenegraph[popup_id .. "_button"]
     local width = self._popup_widths[popup_id]
     local height = self._popup_option_counts[popup_id] * LAYOUT.popup_option_height + 12
-    local x = min(button_node.position[1], self._layout.frame_width - LAYOUT.padding - width)
-    local y = button_node.position[2] + button_node.size[2] + 4
+    local x, y
+
+    if popup_id == "related" then
+        local panel_position = ui_scenegraph.inspector_panel.position
+
+        x = panel_position[1] + button_node.position[1] + button_node.size[1] - width
+        y = max(LAYOUT.padding, panel_position[2] + button_node.position[2] - height - 4)
+    else
+        x = button_node.position[1]
+        y = button_node.position[2] + button_node.size[2] + 4
+    end
+
+    x = min(x, self._layout.frame_width - LAYOUT.padding - width)
 
     self:_place("popup", max(LAYOUT.padding, x), y, width, height)
     self:_force_update_scenegraph()
@@ -1146,7 +1292,8 @@ function IconBrowserView._close_popup(self)
     self._widgets_by_name[popup_id .. "_button"].content.hotspot.is_selected = false
 end
 
---- Marks the option of the open menu that matches the active category or sort.
+--- Marks the option of the open menu that matches the active category or sort; the Related menu
+-- has no active option.
 function IconBrowserView._refresh_popup_selection(self)
     local popup_id = self._open_popup
 
@@ -1155,7 +1302,7 @@ function IconBrowserView._refresh_popup_selection(self)
     end
 
     local state = self._query_state
-    local active_id = popup_id == "category" and state.category or state.sort
+    local active_id = popup_id == "category" and state.category or popup_id == "sort" and state.sort or nil
     local options = self._popup_options[popup_id]
 
     for i = 1, self._popup_option_counts[popup_id] do
@@ -1354,9 +1501,11 @@ function IconBrowserView._run_query(self)
     if count == 0 then
         local message_id = "empty_results"
 
-        if state.term_count == 0 and state.favorites_only then
+        local unfiltered = state.term_count == 0 and state.filter_count == 0
+
+        if unfiltered and state.favorites_only then
             message_id = "empty_favorites"
-        elseif state.term_count == 0 and state.recent_only then
+        elseif unfiltered and state.recent_only then
             message_id = "empty_recent"
         end
 
@@ -1905,6 +2054,53 @@ end
 function IconBrowserView.cb_on_column_pressed(self, sort_key)
     self:_stop_search_input()
     self:_apply_sort(Query.toggle_sort(self._query_state.sort, sort_key))
+end
+
+--- Opens or closes the Related menu of the selected asset.
+function IconBrowserView.cb_on_related_pressed(self)
+    local asset = self._selected_asset
+
+    if self._open_popup == "related" or not asset then
+        self:_close_popup()
+
+        return
+    end
+
+    self:_build_related_options(asset)
+    self:_open_popup_menu("related")
+end
+
+--- Shows the relatives chosen in the Related menu: writes the entry's filter into the search field
+-- and switches the category, favorites and recent filters off, so the count shown in the menu is
+-- what the browser lists; the selection stays and is scrolled into view.
+-- int: index entry of the Related menu
+function IconBrowserView.cb_on_related_option_pressed(self, index)
+    local token = self._related_tokens[index]
+
+    self:_close_popup()
+
+    if not token then
+        return
+    end
+
+    local search_content = self._search_content
+    local state = self._query_state
+
+    search_content.input_text = token
+    search_content.selected_text = nil
+    search_content.caret_position = Utf8.string_length(token) + 1
+    search_content.force_caret_update = true
+
+    if state.category ~= Query.CATEGORY_ALL then
+        state.category = Query.CATEGORY_ALL
+        mod.set_icon_browser_category(Query.CATEGORY_ALL)
+    end
+
+    state.favorites_only = false
+    state.recent_only = false
+    self._results_dirty = true
+    self._keep_selection_visible = true
+    self:_refresh_toolbar()
 end
 
 --- Toggles the favorites filter; switching it on switches the recent filter off.

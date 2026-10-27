@@ -27,18 +27,25 @@ local min = math.min
 local terminal_button_change_function = ButtonPassTemplates.terminal_button_change_function
 local terminal_button_hover_change_function = ButtonPassTemplates.terminal_button_hover_change_function
 
+--- The view definitions module table.
 local Definitions = {}
 
+--- Shared UI materials of the terminal look: a plain square, a vertical gradient, the 2 px frame and
+-- its corner pieces, and the textured panel background.
 local MATERIAL_SQUARE = "content/ui/materials/backgrounds/default_square"
 local MATERIAL_GRADIENT = "content/ui/materials/gradients/gradient_vertical"
 local MATERIAL_FRAME = "content/ui/materials/frames/frame_tile_2px"
 local MATERIAL_CORNER = "content/ui/materials/frames/frame_corner_2px"
 local MATERIAL_PANEL = "content/ui/materials/backgrounds/terminal_basic"
 
--- Smaller than the template's 22 so the inspector's half- and third-width buttons fit their labels.
+--- Font sizes of the inspector's secondary buttons and preview controls; smaller than the template's
+-- 22 so the half- and third-width buttons fit their labels.
 local SECONDARY_BUTTON_FONT_SIZE = 18
 local PREVIEW_BUTTON_FONT_SIZE = 16
 
+--- Colours of the browser as `{ a, r, g, b }`, built once from the game's `Color.terminal_*` set
+-- where one fits: dark desaturated greens for surfaces, olive frames, sage text, and amber and gold
+-- for selection. Change functions copy from these tables and never write them.
 local PALETTE = {
     backdrop = { 170, 3, 7, 5 },
     frame_background = { 228, 9, 14, 11 },
@@ -87,6 +94,7 @@ local PALETTE = {
     transparent = { 0, 0, 0, 0 },
 }
 
+--- The palette, shared with the view.
 Definitions.PALETTE = PALETTE
 
 --- Layout constants in UI units (1080 high); the view derives every node from these and the screen.
@@ -153,6 +161,7 @@ Definitions.DENSITIES = {
     large = { tile = 184, gap = 12, padding = 8, font = 19, label = 30, row = 72, row_font = 20 },
 }
 
+--- Densities in toolbar order, the cycle of preview backgrounds, and the preview zoom factors.
 Definitions.DENSITY_ORDER = { "compact", "normal", "large" }
 Definitions.PREVIEW_BACKGROUNDS = { "dark", "light", "checker" }
 Definitions.ZOOM_LEVELS = { 1, 2, 4 }
@@ -168,12 +177,16 @@ Definitions.ASPECTS = {
     { label = "1:2", width = 1, height = 2 },
 }
 
+--- Cells per side of the checkerboard preview background.
 Definitions.CHECKER_CELLS = 8
 
 -- ----------------------------------------------------------------------------
 -- Styles
 -- ----------------------------------------------------------------------------
 
+--- Copies the four channels of a colour into an existing colour table, without allocating.
+-- tab: source `{ a, r, g, b }` colour
+-- tab: target colour table that is overwritten
 local function _copy_color(source, target)
     target[1] = source[1]
     target[2] = source[2]
@@ -181,8 +194,18 @@ local function _copy_color(source, target)
     target[4] = source[4]
 end
 
+--- `_copy_color`, shared with the view.
 Definitions.copy_color = _copy_color
 
+--- Clones a font style and sets its size, colour and alignment for a text pass.
+-- The colour is also stored as `default_color` for the change functions; the pass is aligned to the
+-- top left of its node with a z offset of 1.
+-- tab: base_style `UIFontSettings` entry
+-- ?number: font_size font size, else the base style's
+-- tab: text_color `{ a, r, g, b }` colour
+-- ?string: horizontal_alignment text alignment, `left` by default
+-- ?string: vertical_alignment text alignment, `center` by default
+-- treturn: tab
 local function _text_style(base_style, font_size, text_color, horizontal_alignment, vertical_alignment)
     local style = clone(base_style)
 
@@ -198,10 +221,12 @@ local function _text_style(base_style, font_size, text_color, horizontal_alignme
     return style
 end
 
+--- Base font styles: body text, the browser title and the inspector title.
 local FONT_BODY = UIFontSettings.body_small or UIFontSettings.body
 local FONT_HEADER = UIFontSettings.header_2 or UIFontSettings.header_1
 local FONT_SUB_HEADER = UIFontSettings.header_3 or FONT_HEADER
 
+--- Hotspot content with the game's default hover and click sounds; cloned into every clickable pass.
 local HOTSPOT_CONTENT = {
     on_hover_sound = UISoundEvents.default_mouse_hover,
     on_pressed_sound = UISoundEvents.default_click,
@@ -209,6 +234,8 @@ local HOTSPOT_CONTENT = {
 
 --- Selected > keyboard focus > hover > default, read from content flags the view sets on bind, so the
 -- hotspot's own `is_selected` (which also routes gamepad confirm presses) is never touched.
+-- tab: content widget content with `hotspot`, `is_selected` and `is_focused`
+-- tab: style pass style with `default_color`, `hover_color`, `focus_color` and `selected_color`
 local function _slot_state_change_function(content, style)
     local color
 
@@ -223,18 +250,35 @@ local function _slot_state_change_function(content, style)
     _copy_color(color or style.default_color, style.text_color or style.color)
 end
 
+--- Visibility function of icon passes: shown while the bound material may be drawn.
+-- tab: content widget content
+-- treturn: bool
 local function _icon_visibility_function(content)
     return content.icon_available
 end
 
+--- Visibility function of the fallback text: shown for a bound asset whose preview cannot be drawn.
+-- tab: content widget content
+-- treturn: bool
 local function _fallback_visibility_function(content)
     return content.has_asset and not content.icon_available
 end
 
+--- Visibility function of the favorite marker.
+-- tab: content widget content
+-- treturn: bool
 local function _favorite_visibility_function(content)
     return content.is_favorite
 end
 
+--- Gives a pass style one colour per state for `_slot_state_change_function`; the drawn colour starts
+-- as a copy of the default.
+-- tab: style pass style to extend
+-- tab: default_color colour without any state
+-- tab: hover_color colour while hovered
+-- tab: focus_color colour while focused by the keyboard
+-- tab: selected_color colour while selected
+-- treturn: tab the style
 local function _state_colors(style, default_color, hover_color, focus_color, selected_color)
     style.color = clone(default_color)
     style.default_color = default_color
@@ -245,6 +289,9 @@ local function _state_colors(style, default_color, hover_color, focus_color, sel
     return style
 end
 
+--- Passes of the thin terminal frame and its corner pieces.
+-- number: frame_z z offset of the frame; the corners sit one above
+-- treturn: tab array of passes
 local function _terminal_frame_passes(frame_z)
     return {
         {
@@ -268,6 +315,10 @@ local function _terminal_frame_passes(frame_z)
     }
 end
 
+--- Appends the entries of one array to another.
+-- tab: target array that is extended
+-- tab: source array whose entries are appended
+-- treturn: tab the target
 local function _append(target, source)
     for i = 1, #source do
         target[#target + 1] = source[i]
@@ -276,6 +327,8 @@ local function _append(target, source)
     return target
 end
 
+--- Passes of a terminal panel: a dark fill, the `terminal_basic` texture and a frame with corners.
+-- treturn: tab array of passes
 local function _panel_passes()
     return _append({
         {
@@ -299,6 +352,9 @@ local function _panel_passes()
     }, _terminal_frame_passes(2))
 end
 
+--- A single text pass whose style id and value id are both `text`.
+-- tab: style text style
+-- treturn: tab array of passes
 local function _text_passes(style)
     return {
         {
@@ -312,6 +368,9 @@ local function _text_passes(style)
 end
 
 --- Terminal control with a small caption above its value; used for the category and sort menus.
+-- The caption is `content.caption`, the value `content.text`; the selected state of the hotspot
+-- marks the button whose menu is open.
+-- treturn: tab array of passes
 local function _dropdown_button_passes()
     local caption_style = _text_style(FONT_BODY, 13, PALETTE.text_sub_header, "left", "top")
     local value_style = _text_style(FONT_BODY, 19, PALETTE.text_header, "left", "bottom")
@@ -399,6 +458,7 @@ local function _dropdown_button_passes()
 end
 
 --- Clickable list column header; `content.is_active` marks the sorted column in gold.
+-- treturn: tab array of passes
 local function _list_header_button_passes()
     local text_style = _text_style(FONT_BODY, 16, PALETTE.text_sub_header, "left", "center")
 
@@ -449,6 +509,10 @@ end
 -- Static definitions
 -- ----------------------------------------------------------------------------
 
+--- Scenegraph node at the top left of its parent; the view sets its size and position at runtime.
+-- string: parent parent node id
+-- ?number: z z position relative to the parent, 1 by default
+-- treturn: tab
 local function _node(parent, z)
     return {
         parent = parent,
@@ -473,8 +537,15 @@ Definitions.TOOLBAR_NODES = {
     "density_large_button",
 }
 
+--- List view columns, left to right.
 Definitions.LIST_COLUMNS = { "preview", "name", "id", "category", "path" }
 
+--- Builds the view's definitions: scenegraph, static widgets, preview widgets and legend entries.
+-- Called by the view's `init` on every opening, so the texts follow the current language. Legend
+-- entries name callbacks and visibility methods of the view.
+-- func: upper upper-case function for titles, `Utf8.upper` where available
+-- treturn: tab with `scenegraph_definition`, `widget_definitions`, `preview_widget_definitions` and
+-- `legend_inputs`
 function Definitions.create(upper)
     local scenegraph_definition = {
         screen = UIWorkspaceSettings.screen,
@@ -740,6 +811,10 @@ function Definitions.create(upper)
 end
 
 --- Inspector preview widgets, drawn by the view inside `pcall` because the icon is an indexed material.
+-- The checkerboard has one light base rect and a dark rect per dark cell, which the view sizes when
+-- the preview area changes; the icon is a `texture_uv` pass whose `uvs` the zoom control sets.
+-- treturn: tab widget definitions by name: `preview_background`, `preview_checker`, `preview_icon`
+-- and `preview_fallback`
 function Definitions.preview_widget_definitions()
     local fallback_style = _text_style(FONT_BODY, 18, PALETTE.text_sub_header, "center", "center")
     local checker_passes = {
@@ -797,6 +872,12 @@ end
 -- ----------------------------------------------------------------------------
 
 --- Grid tile: centred preview box, short label, gold favorite marker, terminal frame and corners.
+-- The view binds `content.icon`, `content.label` and the state flags `has_asset`, `icon_available`,
+-- `is_selected`, `is_focused` and `is_favorite`.
+-- number: width tile width in UI units
+-- number: height tile height in UI units
+-- tab: density entry of `DENSITIES`
+-- treturn: tab widget definition
 function Definitions.tile_definition(width, height, density)
     local padding = density.padding
     local label_height = density.label
@@ -905,6 +986,13 @@ function Definitions.tile_definition(width, height, density)
 end
 
 --- List row; `columns` holds x and width per column, as the view computed them for this layout.
+-- The view binds `content.icon`, `content.name`, `content.id_text`, `content.category`,
+-- `content.path` and the same state flags as a tile, plus `is_odd` for the alternating background.
+-- number: width row width in UI units
+-- number: height row height in UI units
+-- tab: columns column layout with `*_x` and `*_width` per column of `LIST_COLUMNS`
+-- tab: density entry of `DENSITIES`
+-- treturn: tab widget definition
 function Definitions.list_row_definition(width, height, columns, density)
     local font_size = density.row_font
     local preview_size = height - 8
@@ -1052,6 +1140,9 @@ function Definitions.list_row_definition(width, height, columns, density)
 end
 
 --- Popup menu option; `content.is_selected` marks the active value.
+-- number: width option width in UI units
+-- number: height option height in UI units
+-- treturn: tab widget definition
 function Definitions.option_definition(width, height)
     local text_style = _text_style(FONT_BODY, 19, PALETTE.text_body, "left", "center")
 

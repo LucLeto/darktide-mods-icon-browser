@@ -8,6 +8,12 @@
 -- match) against the asset's search text; a term with underscores or hyphens also matches with them
 -- read as spaces.
 --
+-- Query state fields (`new_state`):
+-- `text` the search text as typed; `terms` its lower-case terms; `normalized_terms` each term with
+-- underscores and hyphens read as spaces, or false when that changes nothing; `term_count`;
+-- `category` category id, `all` for no category filter; `favorites_only`, `recent_only` the two
+-- list filters; `sort` sort id of `SORTS`.
+--
 -- Loaded through `mod:io_dofile` by `IconBrowser.lua` and stored as `mod._query_module`.
 -- module: IconBrowser_query
 -- author: LucLeto
@@ -17,8 +23,14 @@ local gsub = string.gsub
 local lower = string.lower
 local sort = table.sort
 
+--- The query module table.
 local Query = {}
 
+-- ----------------------------------------------------------------------------
+-- Constants
+-- ----------------------------------------------------------------------------
+
+--- Category id that disables the category filter, and the sort a new state starts with.
 Query.CATEGORY_ALL = "all"
 Query.DEFAULT_SORT = "index_asc"
 
@@ -34,6 +46,7 @@ Query.SORTS = {
     { id = "index_desc", key = "index", ascending = "index_asc" },
 }
 
+--- Sort options by id.
 local SORT_BY_ID = {}
 
 for i = 1, #Query.SORTS do
@@ -45,6 +58,7 @@ end
 --- Sorts whose order depends on (localized) names, rebuilt when the names change.
 local NAME_DEPENDENT_SORTS = { "name_asc", "name_desc", "category_asc", "category_desc" }
 
+--- Ascending comparators by sort key; ties fall back to the browser ID, so every order is stable.
 local COMPARATORS = {
     name = function(a, b)
         local a_name, b_name = a.sort_name, b.sort_name
@@ -78,11 +92,21 @@ local COMPARATORS = {
     end,
 }
 
+-- ----------------------------------------------------------------------------
+-- Sorting
+-- ----------------------------------------------------------------------------
+
+--- Returns whether an id names a sort option.
+-- param: sort_id candidate sort id
+-- treturn: bool
 function Query.is_valid_sort(sort_id)
     return SORT_BY_ID[sort_id] ~= nil
 end
 
 --- Sort id for a list column header: ascending first, a second click on the same column descends.
+-- string: current_sort_id active sort id
+-- string: key sort key of the clicked column
+-- treturn: string
 function Query.toggle_sort(current_sort_id, key)
     local ascending_id = key .. "_asc"
 
@@ -93,18 +117,26 @@ function Query.toggle_sort(current_sort_id, key)
     return ascending_id
 end
 
+--- Returns the sort key of a sort id, e.g. `name` for `name_desc`.
+-- string: sort_id sort id
+-- treturn: ?string
 function Query.sort_key(sort_id)
     local sort_option = SORT_BY_ID[sort_id]
 
     return sort_option and sort_option.key
 end
 
+--- Returns whether a sort id is a descending sort.
+-- string: sort_id sort id
+-- treturn: bool
 function Query.is_descending(sort_id)
     local sort_option = SORT_BY_ID[sort_id]
 
     return sort_option ~= nil and sort_option.ascending ~= nil
 end
 
+--- Creates an empty cache of sort orders for one asset model.
+-- treturn: tab
 function Query.new_cache()
     return {
         orders = {},
@@ -113,6 +145,12 @@ function Query.new_cache()
 end
 
 --- Returns the cached asset order for a sort id, building it on first use.
+-- An unknown sort id falls back to `DEFAULT_SORT`. Name-based orders are dropped first when the
+-- asset model's `names_revision` changed.
+-- tab: cache cache from `new_cache`
+-- tab: assets asset model
+-- string: sort_id sort id
+-- treturn: tab array of every asset in sort order
 function Query.order(cache, assets, sort_id)
     local orders = cache.orders
 
@@ -158,6 +196,12 @@ function Query.order(cache, assets, sort_id)
     return order
 end
 
+-- ----------------------------------------------------------------------------
+-- Searching and filtering
+-- ----------------------------------------------------------------------------
+
+--- Creates a query state without search text or filters, sorted by `DEFAULT_SORT`.
+-- treturn: tab
 function Query.new_state()
     return {
         text = "",
@@ -171,7 +215,10 @@ function Query.new_state()
     }
 end
 
---- Parses the search text into terms; returns false when the text did not change.
+--- Parses the search text into terms, reusing the state's term arrays.
+-- tab: state query state
+-- ?string: text search text as typed
+-- treturn: bool false when the text did not change
 function Query.set_text(state, text)
     text = text or ""
 
@@ -207,6 +254,14 @@ end
 --- Writes the assets matching `state` into `results` in sort order; returns the match count.
 -- `favorites` and `recent` are path lookups; `previous_count` is the count of the last run, so stale
 -- entries past the new count are cleared without measuring the array.
+-- tab: state query state
+-- tab: assets asset model
+-- tab: cache cache from `new_cache`
+-- tab: favorites lookup from favorite path to true
+-- tab: recent lookup from recent path to a value
+-- tab: results caller-owned array the matches are written into
+-- ?int: previous_count match count of the previous run into `results`
+-- treturn: int
 function Query.run(state, assets, cache, favorites, recent, results, previous_count)
     local order = Query.order(cache, assets, state.sort)
     local category = state.category

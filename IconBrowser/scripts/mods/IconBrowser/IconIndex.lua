@@ -1,6 +1,13 @@
--- Auto-generated icon index (scanned from Darktide source Lua files)
--- Normalization: stripped trailing .material/.png/.dds/.tga and skipped format-template strings containing %
-
+--- Generated index of the UI material paths Icon Browser can show.
+-- Auto-generated icon index (scanned from Darktide source Lua files).
+-- Normalization: stripped trailing .material/.png/.dds/.tga and skipped format-template strings
+-- containing %.
+--
+-- Returns an array of full material paths. `IconBrowser.lua` loads it through `mod:io_dofile`,
+-- sorts it and stores it as `mod._icon_paths`; a path's browser ID is its position in the sorted
+-- array, and the asset model in `IconBrowser_assets.lua` is built from it.
+-- module: IconIndex
+-- author: LucLeto
 return {
     "content/ui/materials/backgrounds/scanner/scanner_background_noise",
     "content/ui/materials/backgrounds/scanner/scanner_balance_progress",

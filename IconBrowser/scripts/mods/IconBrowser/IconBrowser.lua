@@ -1,3 +1,21 @@
+--- DMF entry script of Icon Browser; view registration, packages, settings, favorites and clipboard.
+-- DMF runs this file as the `mod_script` named in `IconBrowser.mod`; `IconBrowser_data.lua` and
+-- `IconBrowser_localization.lua` are loaded by DMF from the same declaration.
+--
+-- Registers the `icon_browser_view` view (`icon_browser_view.lua`) through a `package.preload`
+-- loader and loads the UI and level packages that carry the indexed icon materials;
+-- `toggle_icon_browser`, bound to F8 by default, opens the view once they are loaded and closes it
+-- again. Loads the sorted icon index (`IconIndex.lua`) as `mod._icon_paths`, builds the asset model
+-- from it with `IconBrowser_assets.lua` as `mod._assets` and stores the search, filter and sort
+-- module `IconBrowser_query.lua` as `mod._query_module` for the view.
+--
+-- Also owns everything the view keeps between openings: the clamped layout and display settings
+-- (every change bumps `mod._layout_revision`, which the open view compares each frame), the
+-- favorites and the recent history (dense path arrays in DMF settings, with lookups and a revision
+-- counter), the render failures of icon previews, the session state the view restores, and the
+-- clipboard actions with their chat confirmations.
+-- module: IconBrowser
+-- author: LucLeto
 local mod = get_mod("IconBrowser")
 local Views = require("scripts/ui/views/views")
 
@@ -7,22 +25,35 @@ local format = string.format
 local table_insert = table.insert
 local table_remove = table.remove
 
+-- ----------------------------------------------------------------------------
+-- Constants
+-- ----------------------------------------------------------------------------
+
+--- Name of the registered view, as `Managers.ui` opens and closes it.
 local VIEW_NAME = "icon_browser_view"
+--- Package the view itself depends on.
 local VIEW_PACKAGE = "packages/ui/views/system_view/system_view"
+--- Reference name the icon packages are loaded under.
 local PACKAGE_REF = "IconBrowser"
+--- Module path of the view; `ALT_VIEW_MODULE` is the same file without the mod folder prefix.
 local VIEW_MODULE = "IconBrowser/scripts/mods/IconBrowser/icon_browser_view"
 local ALT_VIEW_MODULE = "scripts/mods/IconBrowser/icon_browser_view"
+--- Module paths of the generated icon index, the asset model, the query module and the
+-- localization table.
 local ICON_INDEX_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconIndex"
 local ASSETS_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_assets"
 local QUERY_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_query"
 local LOCALIZATION_MODULE = "IconBrowser/scripts/mods/IconBrowser/IconBrowser_localization"
+--- Packages whose load was requested or found already loaded, by package name.
 local _requested_icon_packages = {}
 
+--- Defaults of the window settings.
 local DEFAULT_WINDOW_SCALE = 100
 local DEFAULT_WINDOW_OFFSET_X = 0
 local DEFAULT_WINDOW_OFFSET_Y = 0
 local DEFAULT_MOVE_STEP = 10
 
+--- Ranges of the window settings.
 -- 100 % is the near-full-screen frame; larger saved values from the fixed-size window clamp to it.
 local MIN_WINDOW_SCALE = 50
 local MAX_WINDOW_SCALE = 100
@@ -31,14 +62,18 @@ local MAX_WINDOW_POSITION = 12000
 local MIN_MOVE_STEP = 1
 local MAX_MOVE_STEP = 200
 
+--- Default and range of the inspector width setting, in percent of the content width.
 local DEFAULT_INSPECTOR_WIDTH = 28
 local MIN_INSPECTOR_WIDTH = 25
 local MAX_INSPECTOR_WIDTH = 40
 
+--- DMF setting ids of the favorites and the recent history, both dense arrays of full paths, and
+-- the history's length.
 local FAVORITES_SETTING = "icon_browser_favorites"
 local RECENT_SETTING = "icon_browser_recent"
 local MAX_RECENT_ICONS = 30
 
+--- Valid values and defaults of the display preferences the view persists.
 local DENSITIES = { compact = true, normal = true, large = true }
 local DEFAULT_DENSITY = "normal"
 local VIEW_MODES = { grid = true, list = true }
@@ -48,6 +83,7 @@ local DEFAULT_PREVIEW_BACKGROUND = "dark"
 local DEFAULT_CATEGORY = "all"
 local DEFAULT_SORT = "index_asc"
 
+--- UI packages loaded so the indexed icon materials can be drawn; unavailable ones are skipped.
 local ICON_BROWSER_PACKAGES = {
     -- Core menu and profile surfaces, broad UI atlas coverage
     "packages/ui/views/main_menu_view/main_menu_view",
@@ -153,6 +189,7 @@ local ICON_BROWSER_PACKAGES = {
     "packages/ui/hud/player_buffs/player_buffs",
 }
 
+--- Level packages that pull in further UI material dependencies; unavailable ones are skipped.
 local ICON_BROWSER_LEVEL_PACKAGES = {
     -- Inventory and itemization levels, often pull extra material dependencies
     "content/levels/ui/inventory/inventory",
@@ -184,6 +221,15 @@ local ICON_BROWSER_LEVEL_PACKAGES = {
     "content/levels/ui/expedition/world",
 }
 
+-- ----------------------------------------------------------------------------
+-- Helpers
+-- ----------------------------------------------------------------------------
+
+--- Clamps a value into a range.
+-- number: value value to clamp
+-- number: min_value lower bound
+-- number: max_value upper bound
+-- treturn: number
 local function _clamp(value, min_value, max_value)
     if value < min_value then
         return min_value
@@ -194,16 +240,26 @@ local function _clamp(value, min_value, max_value)
     return value
 end
 
+--- Converts a setting value to a whole number in range, using the default for anything non-numeric.
+-- param: value stored setting value, possibly nil or a string
+-- number: default_value value used when `value` is not a number
+-- number: min_value lower bound
+-- number: max_value upper bound
+-- treturn: number
 local function _normalize_int(value, default_value, min_value, max_value)
     local numeric_value = floor(tonumber(value) or default_value)
 
     return _clamp(numeric_value, min_value, max_value)
 end
 
+--- Bumps `mod._layout_revision`, so an open view re-applies its layout on the next frame.
 local function _bump_layout_revision()
     mod._layout_revision = (mod._layout_revision or 0) + 1
 end
 
+--- Runs a mod file through DMF's `io_dofile`, falling back to `require` without DMF.
+-- string: module_path module path without extension
+-- treturn: param the chunk's return value
 local function _dofile_module(module_path)
     if mod and mod.io_dofile then
         return mod:io_dofile(module_path)
@@ -212,6 +268,9 @@ local function _dofile_module(module_path)
     return require(module_path)
 end
 
+--- Loads a module that returns a table; echoes the error and returns nil when it fails.
+-- string: module_path module path without extension
+-- treturn: ?tab the module table
 local function _load_module(module_path)
     local ok, module = pcall(_dofile_module, module_path)
 
@@ -224,6 +283,9 @@ local function _load_module(module_path)
     return nil
 end
 
+--- Echoes a message to the chat and, when the Mods message API exists, also shows it in game.
+-- string: message text to show
+-- ?bool: prefer_notification show it as a notification instead of a chat echo
 local function _emit_user_message(message, prefer_notification)
     mod:echo(message)
 
@@ -238,6 +300,12 @@ local function _emit_user_message(message, prefer_notification)
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- View registration and packages
+-- ----------------------------------------------------------------------------
+
+--- Registers a `package.preload` loader for the view module under both of its module paths, so
+-- the UI manager's `require` of the view's `path` runs the mod file.
 local function _register_view_module_preload()
     local package_preload = package and package.preload
 
@@ -262,6 +330,7 @@ local function _register_view_module_preload()
     end
 end
 
+--- Adds the view's settings to the game's `Views` table, once.
 local function _register_view()
     _register_view_module_preload()
 
@@ -284,6 +353,8 @@ local function _register_view()
     }
 end
 
+--- Loads the generated icon index and sorts it; the browser ID of a path is its sorted position.
+-- treturn: tab array of material paths, empty when the index cannot be loaded
 local function _load_icon_index()
     local ok, icons = pcall(function()
         if mod and mod.io_dofile then
@@ -301,6 +372,9 @@ local function _load_icon_index()
     return {}
 end
 
+--- Returns whether the game ships a package of that name.
+-- string: package_name package resource name
+-- treturn: bool
 local function _package_is_available(package_name)
     local application = Application
 
@@ -315,6 +389,9 @@ local function _package_is_available(package_name)
     return ok and exists or false
 end
 
+--- Returns whether the package manager has finished loading a package.
+-- string: package_name package resource name
+-- treturn: bool
 local function _package_is_loaded(package_name)
     local managers = Managers
     local package_manager = managers and managers.package
@@ -328,6 +405,8 @@ local function _package_is_loaded(package_name)
     return ok and is_loaded or false
 end
 
+--- Requests an asynchronous load of every available package of a list that was not requested yet.
+-- tab: package_list array of package names
 local function _load_package_list(package_list)
     local managers = Managers
     local package_manager = managers and managers.package
@@ -353,6 +432,9 @@ local function _load_package_list(package_list)
     end
 end
 
+--- Returns whether every available package of a list has finished loading.
+-- tab: package_list array of package names
+-- treturn: bool
 local function _all_packages_loaded(package_list)
     for _, pkg in ipairs(package_list) do
         if _package_is_available(pkg) and not _package_is_loaded(pkg) then
@@ -363,6 +445,8 @@ local function _all_packages_loaded(package_list)
     return true
 end
 
+--- Requests the icon packages and returns whether all of them are loaded.
+-- treturn: bool
 local function _ensure_icon_packages_loaded()
     local managers = Managers
     local package_manager = managers and managers.package
@@ -377,6 +461,8 @@ local function _ensure_icon_packages_loaded()
     return _all_packages_loaded(ICON_BROWSER_PACKAGES) and _all_packages_loaded(ICON_BROWSER_LEVEL_PACKAGES)
 end
 
+--- Returns whether the UI manager reports the view as active.
+-- treturn: bool
 local function _view_is_active()
     local managers = Managers
     local ui_manager = managers and managers.ui
@@ -384,29 +470,46 @@ local function _view_is_active()
     return ui_manager and ui_manager:view_active(VIEW_NAME)
 end
 
+-- ----------------------------------------------------------------------------
+-- Settings
+-- ----------------------------------------------------------------------------
+
+--- Returns the Window Size setting, 50 to 100 percent of the near-full-screen frame.
+-- treturn: number
 function mod.get_icon_browser_scale()
     return _normalize_int(mod:get("icon_browser_scale"), DEFAULT_WINDOW_SCALE, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE)
 end
 
+--- Returns the horizontal frame offset setting; the view clamps it so the frame stays on screen.
+-- treturn: number
 function mod.get_icon_browser_offset_x()
     return _normalize_int(mod:get("icon_browser_pos_x"), DEFAULT_WINDOW_OFFSET_X, MIN_WINDOW_POSITION,
         MAX_WINDOW_POSITION)
 end
 
+--- Returns the vertical frame offset setting; the view clamps it so the frame stays on screen.
+-- treturn: number
 function mod.get_icon_browser_offset_y()
     return _normalize_int(mod:get("icon_browser_pos_y"), DEFAULT_WINDOW_OFFSET_Y, MIN_WINDOW_POSITION,
         MAX_WINDOW_POSITION)
 end
 
+--- Returns how far the move keybinds shift the frame, in UI units.
+-- treturn: number
 function mod.get_icon_browser_move_step()
     return _normalize_int(mod:get("icon_browser_move_step"), DEFAULT_MOVE_STEP, MIN_MOVE_STEP, MAX_MOVE_STEP)
 end
 
+--- Stores the Window Size setting, clamped, and bumps the layout revision.
+-- param: new_value new size in percent
 function mod.set_icon_browser_scale(new_value)
     mod:set("icon_browser_scale", _normalize_int(new_value, DEFAULT_WINDOW_SCALE, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE))
     _bump_layout_revision()
 end
 
+--- Stores the frame offsets, clamped, and bumps the layout revision; a nil offset is kept.
+-- ?number: new_x new horizontal offset
+-- ?number: new_y new vertical offset
 function mod.set_icon_browser_position(new_x, new_y)
     if new_x ~= nil then
         mod:set("icon_browser_pos_x",
@@ -421,21 +524,29 @@ function mod.set_icon_browser_position(new_x, new_y)
     _bump_layout_revision()
 end
 
+--- Stores the move step setting, clamped.
+-- param: new_value new step in UI units
 function mod.set_icon_browser_move_step(new_value)
     mod:set("icon_browser_move_step", _normalize_int(new_value, DEFAULT_MOVE_STEP, MIN_MOVE_STEP, MAX_MOVE_STEP))
 end
 
+--- Returns the inspector width setting, 25 to 40 percent of the content width.
+-- treturn: number
 function mod.get_icon_browser_inspector_width()
     return _normalize_int(mod:get("icon_browser_inspector_width"), DEFAULT_INSPECTOR_WIDTH, MIN_INSPECTOR_WIDTH,
         MAX_INSPECTOR_WIDTH)
 end
 
+--- Returns the thumbnail density, `compact`, `normal` or `large`.
+-- treturn: string
 function mod.get_icon_browser_density()
     local density = mod:get("icon_browser_density")
 
     return DENSITIES[density] and density or DEFAULT_DENSITY
 end
 
+--- Stores a valid thumbnail density and bumps the layout revision; anything else is ignored.
+-- string: density `compact`, `normal` or `large`
 function mod.set_icon_browser_density(density)
     if DENSITIES[density] then
         mod:set("icon_browser_density", density)
@@ -443,12 +554,16 @@ function mod.set_icon_browser_density(density)
     end
 end
 
+--- Returns the browser view mode, `grid` or `list`.
+-- treturn: string
 function mod.get_icon_browser_view_mode()
     local view_mode = mod:get("icon_browser_view_mode")
 
     return VIEW_MODES[view_mode] and view_mode or DEFAULT_VIEW_MODE
 end
 
+--- Stores a valid view mode and bumps the layout revision; anything else is ignored.
+-- string: view_mode `grid` or `list`
 function mod.set_icon_browser_view_mode(view_mode)
     if VIEW_MODES[view_mode] then
         mod:set("icon_browser_view_mode", view_mode)
@@ -456,6 +571,8 @@ function mod.set_icon_browser_view_mode(view_mode)
     end
 end
 
+--- Returns the persisted category filter, or `all` when the stored id is no longer a category.
+-- treturn: string category id of `Assets.CATEGORIES`
 function mod.get_icon_browser_category()
     local category = mod:get("icon_browser_category")
     local assets = mod._assets
@@ -467,6 +584,8 @@ function mod.get_icon_browser_category()
     return DEFAULT_CATEGORY
 end
 
+--- Stores a category filter that exists in the asset model; anything else is ignored.
+-- string: category category id of `Assets.CATEGORIES`
 function mod.set_icon_browser_category(category)
     local assets = mod._assets
 
@@ -475,6 +594,8 @@ function mod.set_icon_browser_category(category)
     end
 end
 
+--- Returns the persisted sort id, or `index_asc` when the stored id is not a sort.
+-- treturn: string sort id of `Query.SORTS`
 function mod.get_icon_browser_sort()
     local sort_id = mod:get("icon_browser_sort")
     local query_module = mod._query_module
@@ -486,6 +607,8 @@ function mod.get_icon_browser_sort()
     return DEFAULT_SORT
 end
 
+--- Stores a valid sort id; anything else is ignored.
+-- string: sort_id sort id of `Query.SORTS`
 function mod.set_icon_browser_sort(sort_id)
     local query_module = mod._query_module
 
@@ -494,48 +617,73 @@ function mod.set_icon_browser_sort(sort_id)
     end
 end
 
+--- Returns the inspector preview background, `dark`, `light` or `checker`.
+-- treturn: string
 function mod.get_icon_browser_preview_background()
     local background = mod:get("icon_browser_preview_background")
 
     return PREVIEW_BACKGROUNDS[background] and background or DEFAULT_PREVIEW_BACKGROUND
 end
 
+--- Stores a valid preview background; anything else is ignored.
+-- string: background `dark`, `light` or `checker`
 function mod.set_icon_browser_preview_background(background)
     if PREVIEW_BACKGROUNDS[background] then
         mod:set("icon_browser_preview_background", background)
     end
 end
 
+--- Returns whether double-clicking an asset copies its material path; on unless switched off.
+-- treturn: bool
 function mod.is_icon_browser_double_click_copy_enabled()
     return mod:get("icon_browser_double_click_copy") ~= false
 end
 
+--- Returns whether the C key copies the selected path; on unless switched off. Ctrl+C always copies.
+-- treturn: bool
 function mod.is_icon_browser_copy_hotkey_enabled()
     return mod:get("icon_browser_copy_hotkey") ~= false
 end
 
+--- DMF keybind function that moves the frame left by the move step.
+-- param: ... keybind arguments, unused
 function mod.move_icon_browser_left(...)
     local move_step = mod.get_icon_browser_move_step()
     mod.set_icon_browser_position(mod.get_icon_browser_offset_x() - move_step, nil)
 end
 
+--- DMF keybind function that moves the frame right by the move step.
+-- param: ... keybind arguments, unused
 function mod.move_icon_browser_right(...)
     local move_step = mod.get_icon_browser_move_step()
     mod.set_icon_browser_position(mod.get_icon_browser_offset_x() + move_step, nil)
 end
 
+--- DMF keybind function that moves the frame up by the move step.
+-- param: ... keybind arguments, unused
 function mod.move_icon_browser_up(...)
     local move_step = mod.get_icon_browser_move_step()
     mod.set_icon_browser_position(nil, mod.get_icon_browser_offset_y() - move_step)
 end
 
+--- DMF keybind function that moves the frame down by the move step.
+-- param: ... keybind arguments, unused
 function mod.move_icon_browser_down(...)
     local move_step = mod.get_icon_browser_move_step()
     mod.set_icon_browser_position(nil, mod.get_icon_browser_offset_y() + move_step)
 end
 
+-- ----------------------------------------------------------------------------
+-- Startup
+-- ----------------------------------------------------------------------------
+
 --- Reads a persisted path list into a dense array and a path lookup, dropping invalid and duplicate
 -- entries so a damaged setting can never produce a mixed table on the next save.
+-- string: setting_id DMF setting id of the list
+-- ?int: limit maximum number of entries kept
+-- treturn: tab dense array of paths
+-- treturn: tab lookup from path to true
+-- treturn: int number of paths
 local function _load_path_list(setting_id, limit)
     local value = mod:get(setting_id)
     local list = {}
@@ -571,6 +719,8 @@ local function _migrate_settings()
     end
 end
 
+--- Registers the input legend texts as global `loc_` keys, which the game's legend localizes.
+-- The texts come from this mod's localization table, so every language stays in one file.
 local function _register_global_localization()
     if not mod.add_global_localize_strings then
         return
@@ -589,6 +739,8 @@ local function _register_global_localization()
     })
 end
 
+-- State kept across DMF reloads: the icon index, whether the view is open, the render failures,
+-- the revision counters and the session state the view restores when it opens again.
 _register_view()
 mod._icon_paths = mod._icon_paths or _load_icon_index()
 mod._icon_browser_view_open = mod._icon_browser_view_open or false
@@ -602,6 +754,7 @@ mod._icon_browser_session = mod._icon_browser_session or {
     recent_only = false,
 }
 
+-- Rebuilt on every load: the modules, the asset model and the cached favorites and history.
 mod._assets_module = _load_module(ASSETS_MODULE)
 mod._query_module = _load_module(QUERY_MODULE)
 mod._assets = mod._assets_module and mod._assets_module.build(mod._icon_paths, mod)
@@ -610,19 +763,32 @@ mod._recent_icons, mod._recent_lookup, mod._recent_count = _load_path_list(RECEN
 _migrate_settings()
 _register_global_localization()
 
+-- ----------------------------------------------------------------------------
+-- Assets, favorites and recent history
+-- ----------------------------------------------------------------------------
+
+--- Returns the sorted icon index.
+-- treturn: tab array of material paths
 function mod.get_icon_paths()
     return mod._icon_paths or {}
 end
 
+--- Returns the asset model built by `IconBrowser_assets.lua`, or nil when it failed to load.
+-- treturn: ?tab
 function mod.get_icon_assets()
     return mod._assets
 end
 
+--- Returns whether a path is a favorite.
+-- string: path full material path
+-- treturn: bool
 function mod.is_icon_favorite(path)
     return mod._favorite_lookup[path] == true
 end
 
---- Adds or removes a favorite by full path; returns whether the path is a favorite afterwards.
+--- Adds or removes a favorite by full path and stores the list.
+-- string: path full material path
+-- treturn: bool whether the path is a favorite afterwards
 function mod.toggle_icon_favorite(path)
     if type(path) ~= "string" or path == "" then
         return false
@@ -660,6 +826,7 @@ function mod.toggle_icon_favorite(path)
 end
 
 --- Moves a path to the front of the recent history, keeping at most `MAX_RECENT_ICONS` entries.
+-- string: path full material path of a selected or copied asset
 function mod.record_recent_icon(path)
     if type(path) ~= "string" or path == "" then
         return
@@ -700,6 +867,7 @@ function mod.record_recent_icon(path)
     mod._icon_lists_dirty = true
 end
 
+--- Empties the recent history and stores it.
 function mod.clear_recent_icons()
     local list = mod._recent_icons
     local lookup = mod._recent_lookup
@@ -715,7 +883,8 @@ function mod.clear_recent_icons()
     mod._icon_lists_dirty = true
 end
 
---- DMF writes settings to disk only on game state changes; favorites and history changed in the
+--- Writes the DMF settings file when favorites or the history changed since the last call.
+-- DMF writes settings to disk only on game state changes; favorites and history changed in the
 -- browser are written when it closes, so a crash later in the session cannot lose them.
 function mod.save_icon_lists_if_dirty()
     if not mod._icon_lists_dirty then
@@ -732,10 +901,20 @@ function mod.save_icon_lists_if_dirty()
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- Render failures and clipboard
+-- ----------------------------------------------------------------------------
+
+--- Returns whether a path may be drawn as a preview; paths that failed once are never drawn again.
+-- param: path material path
+-- treturn: bool
 function mod.can_render_icon_path(path)
     return type(path) == "string" and path ~= "" and not mod._icon_render_failures[path]
 end
 
+--- Records that a preview failed to draw and reports it once per path.
+-- string: path material path that failed
+-- ?param: error_message error raised by the draw
 function mod.mark_icon_render_failed(path, error_message)
     if type(path) ~= "string" or path == "" then
         return
@@ -758,6 +937,11 @@ function mod.mark_icon_render_failed(path, error_message)
     _emit_user_message(message, false)
 end
 
+--- Copies a material path to the clipboard and confirms it in chat and as a notification.
+-- ?int: icon_id browser ID shown in the message
+-- string: path material path to copy
+-- treturn: bool whether the path was copied
+-- treturn: string short English status
 function mod.copy_icon_path_to_clipboard(icon_id, path)
     if type(path) ~= "string" or path == "" then
         local message = "[IconBrowser] Unable to copy icon path."
@@ -797,6 +981,11 @@ end
 
 --- Copies a value derived from an icon (filename, Lua string, UI snippet). The chat message names the
 -- copied format and the icon path instead of echoing a possibly multi-line value.
+-- ?int: icon_id browser ID shown in the message
+-- string: text value to copy
+-- ?string: format_label name of the copied format, e.g. `filename`
+-- ?string: path material path shown in the message
+-- treturn: bool whether the value was copied
 function mod.copy_icon_text_to_clipboard(icon_id, text, format_label, path)
     format_label = format_label or "value"
     path = path or ""
@@ -830,6 +1019,12 @@ function mod.copy_icon_text_to_clipboard(icon_id, text, format_label, path)
     return false
 end
 
+-- ----------------------------------------------------------------------------
+-- Opening, closing and DMF callbacks
+-- ----------------------------------------------------------------------------
+
+--- Opens the view unless it is already active.
+-- treturn: bool false when the UI manager is not available
 local function _open_icon_browser_view()
     local managers = Managers
     local ui_manager = managers and managers.ui
@@ -849,10 +1044,13 @@ local function _open_icon_browser_view()
     return true
 end
 
+--- DMF callback run once all mods are loaded; starts loading the icon packages early.
 function mod.on_all_mods_loaded()
     _ensure_icon_packages_loaded()
 end
 
+--- DMF callback run every frame; opens a requested view as soon as its packages have loaded.
+-- number: dt frame delta time
 function mod.update(dt)
     if mod._pending_icon_browser_open and _ensure_icon_packages_loaded() then
         mod._pending_icon_browser_open = false
@@ -861,6 +1059,8 @@ function mod.update(dt)
     end
 end
 
+--- Opens the browser, or queues the opening and says so once while the icon packages still load.
+-- param: ... keybind arguments, unused
 function mod.open_icon_browser(...)
     _register_view()
 
@@ -882,6 +1082,8 @@ function mod.open_icon_browser(...)
     _open_icon_browser_view()
 end
 
+--- Closes the browser and cancels a queued opening.
+-- param: ... keybind arguments, unused
 function mod.close_icon_browser(...)
     local managers = Managers
     local ui_manager = managers and managers.ui
@@ -900,6 +1102,9 @@ function mod.close_icon_browser(...)
     mod._icon_browser_view_open = false
 end
 
+--- DMF keybind function of the Open Icon Browser keybind; closes an open or queued browser,
+-- otherwise opens it.
+-- param: ... keybind arguments, unused
 function mod.toggle_icon_browser(...)
     if _view_is_active() or mod._icon_browser_view_open or mod._pending_icon_browser_open then
         mod.close_icon_browser()
@@ -908,6 +1113,9 @@ function mod.toggle_icon_browser(...)
     end
 end
 
+--- DMF callback for a changed setting; bumps the layout revision, so an open view re-reads its
+-- layout and display settings.
+-- ?string: _setting_id changed setting, unused
 function mod.on_setting_changed(_setting_id)
     _bump_layout_revision()
 end

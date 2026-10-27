@@ -1,3 +1,19 @@
+--- Icon Browser's DMF localization table.
+-- Returns a table from localization id to a table of texts by language code; DMF resolves
+-- `mod:localize(id)` against it and falls back to English for a missing language. The original
+-- texts (mod name and description, list columns and the window settings) cover all twelve supported
+-- languages; the texts added with the full-screen browser provide English and German. Holds the
+-- setting titles, tooltips and dropdown options, the toolbar, category, sort, list, inspector,
+-- status and shortcut hint texts, and the input legend texts, which `IconBrowser.lua` also
+-- registers as global `loc_icon_browser_legend_*` keys for the game's input legend. Texts are
+-- passed through `string.format` by DMF, so a literal percent sign is written as `%%`;
+-- `count_format`, `preview_zoom_format`, `preview_aspect_format` and the `name_source_*` texts take
+-- arguments.
+--
+-- Loaded by DMF as `mod_localization`, as declared in `IconBrowser.mod`, and by `IconBrowser.lua`
+-- through `mod:io_dofile` for the global legend keys.
+-- module: IconBrowser_localization
+-- author: LucLeto
 return {
     mod_name = {
         en = "Icon Browser",

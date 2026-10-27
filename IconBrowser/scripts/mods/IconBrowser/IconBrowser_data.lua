@@ -1,3 +1,16 @@
+--- Icon Browser's DMF mod data; the mod description and the settings menu.
+-- The returned table names the mod, makes it togglable and declares its options: the Open Icon
+-- Browser keybind (F8 by default, a global `function_call` keybind of `toggle_icon_browser`); the
+-- frame's Window Size, X and Y position and move step with four optional move keybinds; and the
+-- browser's Inspector Width, Thumbnail Density, Double-Click Copies Path and C Key Copies Path.
+-- Every option has a tooltip. The settings are read through the getters in `IconBrowser.lua`, which
+-- clamp or validate them and fall back to the defaults declared here. The view stores further state
+-- with `mod:set` under ids that have no widget here: view mode, category, sort, preview background,
+-- favorites and the recent history.
+--
+-- Loaded by DMF as `mod_data`, as declared in `IconBrowser.mod`.
+-- module: IconBrowser_data
+-- author: LucLeto
 local mod = get_mod("IconBrowser")
 
 return {
@@ -6,6 +19,7 @@ return {
     is_togglable = true,
     options = {
         widgets = {
+            -- Opening and closing the browser
             {
                 setting_id = "open_icon_browser",
                 type = "keybind",
@@ -16,6 +30,7 @@ return {
                 function_name = "toggle_icon_browser",
                 tooltip = mod:localize("open_tooltip"),
             },
+            -- Frame size and position; 100 % fills the screen above the input legend
             {
                 setting_id = "icon_browser_scale",
                 type = "numeric",
@@ -112,6 +127,7 @@ return {
                 function_name = "move_icon_browser_down",
                 tooltip = mod:localize("move_down_tooltip"),
             },
+            -- Browser layout and copy shortcuts
             {
                 setting_id = "icon_browser_inspector_width",
                 type = "numeric",

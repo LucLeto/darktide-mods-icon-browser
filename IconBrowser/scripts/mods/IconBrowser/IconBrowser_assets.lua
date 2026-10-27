@@ -7,7 +7,24 @@
 -- pair a UI material with a localization key; only keys the localization manager reports as existing
 -- are used, so no name is guessed.
 --
--- Loaded through `mod:io_dofile` by `IconBrowser.lua` and stored as `mod._assets_module`.
+-- Asset fields:
+-- `id` browser ID, the position in the sorted index; `id_text` the same as `#id`;
+-- `path` full material path, the canonical identifier; `filename` its last path segment;
+-- `directory` the path between `content/ui/materials/` and the filename;
+-- `readable_name` the humanized filename, prefixed with the parent folder when several indexed paths
+-- share the filename;
+-- `display_name` the shown name: the localized name, else the humanized definition key, else
+-- `readable_name`; `sort_name` its lower-case form for sorting;
+-- `name_source` one of the `NAME_SOURCE_*` values; `name_key` the localization key of a localized
+-- name, else false; `name_origin` the definition the name came from as `source.key`, else false;
+-- `name_uses` how many further definitions use the same material;
+-- `category` category id of `CATEGORIES`; `category_label` its localized label;
+-- `search_blob` lower-case path, the path with `_`, `-` and `/` read as spaces, the names and
+-- `#id`, separated by `|`;
+-- `lua_string`, `ui_snippet` the copy formats, built on first use, else false.
+--
+-- Loaded through `mod:io_dofile` by `IconBrowser.lua` and stored as `mod._assets_module`; the
+-- model built by `build` is stored as `mod._assets`.
 -- module: IconBrowser_assets
 -- author: LucLeto
 local find = string.find
@@ -23,11 +40,19 @@ local sort = table.sort
 local tostring = tostring
 local type = type
 
+--- The assets module table.
 local Assets = {}
 
+-- ----------------------------------------------------------------------------
+-- Constants
+-- ----------------------------------------------------------------------------
+
+--- Prefix shared by every UI material path; categories match the path below it.
 local MATERIAL_ROOT = "content/ui/materials/"
 local MATERIAL_ROOT_LENGTH = #MATERIAL_ROOT
 
+--- Sources of an asset's display name: a localized definition name, a humanized definition key, or
+-- the humanized filename.
 Assets.NAME_SOURCE_LOCALIZED = "localized"
 Assets.NAME_SOURCE_DEFINITION = "definition"
 Assets.NAME_SOURCE_FILENAME = "filename"
@@ -70,9 +95,12 @@ Assets.CATEGORIES = {
     { id = "other" },
 }
 
+--- Ids of the pseudo category and of the fallback category.
 local CATEGORY_ALL = "all"
 local CATEGORY_OTHER = "other"
 
+--- Lua UI snippet copied for an asset: a texture pass for `UIWidget.create_definition`, with the
+-- material path as `%s`.
 local UI_SNIPPET_FORMAT = [[{
     pass_type = "texture",
     style_id = "icon",
@@ -85,10 +113,21 @@ local UI_SNIPPET_FORMAT = [[{
     },
 },]]
 
+-- ----------------------------------------------------------------------------
+-- Derived fields
+-- ----------------------------------------------------------------------------
+
+--- `gsub` replacement that upper-cases the first letter of a word.
+-- string: first first letter
+-- string: rest rest of the word
+-- treturn: string
 local function _capitalize(first, rest)
     return upper(first) .. rest
 end
 
+--- Turns an identifier such as `credits_big` into a readable name such as `Credits Big`.
+-- string: text identifier with underscores or hyphens
+-- treturn: string
 local function _humanize(text)
     text = gsub(text, "[_%-]+", " ")
     text = gsub(text, "^%s+", "")
@@ -97,6 +136,9 @@ local function _humanize(text)
     return (gsub(text, "(%a)(%w*)", _capitalize))
 end
 
+--- Returns a material path without its `content/ui/materials/` prefix.
+-- string: path full material path
+-- treturn: string
 local function _relative_path(path)
     if sub(path, 1, MATERIAL_ROOT_LENGTH) == MATERIAL_ROOT then
         return sub(path, MATERIAL_ROOT_LENGTH + 1)
@@ -105,6 +147,9 @@ local function _relative_path(path)
     return path
 end
 
+--- Returns the id of the first category with a prefix matching the path, else `other`.
+-- string: relative_path path below `content/ui/materials/`
+-- treturn: string category id
 local function _category_of(relative_path)
     local categories = Assets.CATEGORIES
 
@@ -123,6 +168,11 @@ local function _category_of(relative_path)
     return CATEGORY_OTHER
 end
 
+--- Builds the lower-case text an asset is searched in.
+-- tab: asset asset record with `path`, `readable_name` and `id_text`
+-- ?string: localized_name verified localized name
+-- ?string: definition_name humanized definition key
+-- treturn: string
 local function _search_blob(asset, localized_name, definition_name)
     local lower_path = lower(asset.path)
 
@@ -136,6 +186,12 @@ local function _search_blob(asset, localized_name, definition_name)
 end
 
 --- Builds the asset model from the sorted path list; `mod` localizes the category labels.
+-- The model holds `list` (assets by browser ID), `count`, `by_path` (assets by full path),
+-- `category_counts` and `category_labels` (by category id, `all` included), and `names_revision`
+-- and `names_resolved`, which `resolve_names` updates.
+-- tab: paths sorted array of material paths
+-- tab: mod the DMF mod, for `mod:localize`
+-- treturn: tab asset model
 function Assets.build(paths, mod)
     local count = #paths
     local list = {}
@@ -221,6 +277,13 @@ end
 -- Localized names
 -- ----------------------------------------------------------------------------
 
+-- Every collector walks one game definition table and calls
+-- `add(material, loc_key, source, key)` for each material it names; `add` ignores materials that
+-- are not in the index.
+
+--- Mission types: `icon` and `mission_board_icon` named by `name`.
+-- tab: data `MissionTypes`
+-- func: add candidate collector
 local function _collect_mission_types(data, add)
     for key, entry in pairs(data) do
         if type(entry) == "table" then
@@ -230,6 +293,9 @@ local function _collect_mission_types(data, add)
     end
 end
 
+--- Circumstances: `ui.icon` and `ui.mission_board_icon` named by `ui.display_name`.
+-- tab: data `CircumstanceTemplates`
+-- func: add candidate collector
 local function _collect_circumstances(data, add)
     for key, entry in pairs(data) do
         local ui = type(entry) == "table" and entry.ui
@@ -241,6 +307,9 @@ local function _collect_circumstances(data, add)
     end
 end
 
+--- Currencies: `icon_texture_big` and `icon_texture_small` named by `display_name`.
+-- tab: data `WalletSettings`
+-- func: add candidate collector
 local function _collect_wallets(data, add)
     for key, entry in pairs(data) do
         if type(entry) == "table" then
@@ -250,6 +319,9 @@ local function _collect_wallets(data, add)
     end
 end
 
+--- Difficulty levels: `icon` and `digital_icon` named by `display_name`, keyed by the level name.
+-- tab: data `DangerSettings`
+-- func: add candidate collector
 local function _collect_danger_levels(data, add)
     local danger_levels = data.danger_levels
 
@@ -267,6 +339,7 @@ local function _collect_danger_levels(data, add)
     end
 end
 
+--- Archetype fields that hold a class icon material, all named by the archetype's name.
 local ARCHETYPE_ICON_FIELDS = {
     "archetype_icon_large",
     "archetype_icon_selection_large",
@@ -275,6 +348,9 @@ local ARCHETYPE_ICON_FIELDS = {
     "archetype_badge",
 }
 
+--- Classes: the `ARCHETYPE_ICON_FIELDS` materials named by `archetype_name`.
+-- tab: data `Archetypes`
+-- func: add candidate collector
 local function _collect_archetypes(data, add)
     for key, entry in pairs(data) do
         if type(entry) == "table" then
@@ -285,6 +361,9 @@ local function _collect_archetypes(data, add)
     end
 end
 
+--- Item types and store categories: two pairs of `UISettings` lookups joined on their shared keys.
+-- tab: data `UISettings`
+-- func: add candidate collector
 local function _collect_ui_settings(data, add)
     local materials = data.item_type_material_lookup
     local names = data.item_type_localization_lookup
@@ -305,6 +384,9 @@ local function _collect_ui_settings(data, add)
     end
 end
 
+--- Crafting recipes: `icon` named by `display_name`.
+-- tab: data `CraftingSettings` or the Mechanicus crafting settings
+-- func: add candidate collector
 local function _collect_recipes(data, add)
     local recipes = data.recipes
 
@@ -332,6 +414,9 @@ local NAME_SOURCES = {
     { module = "scripts/settings/item/crafting_mechanicus_settings", collect = _collect_recipes },
 }
 
+--- Localizes a key only when the localization manager reports it as existing.
+-- param: key candidate localization key
+-- treturn: ?string the localized text, nil for a missing, invalid or unlocalized key
 local function _localize_key(key)
     if type(key) ~= "string" or sub(key, 1, 4) ~= "loc_" then
         return nil
@@ -359,11 +444,21 @@ local function _localize_key(key)
     return nil
 end
 
+--- Orders name candidates by `source.key`, so the chosen name does not depend on table order.
+-- tab: a candidate
+-- tab: b candidate
+-- treturn: bool
 local function _compare_candidates(a, b)
     return a.origin < b.origin
 end
 
---- Resolves verified names once; safe to call repeatedly. Returns the number of named assets.
+--- Resolves verified names once; safe to call repeatedly.
+-- Collects every definition naming an indexed material, takes the first candidate in `source.key`
+-- order whose key localizes, else the first candidate's humanized key, and rebuilds the named
+-- assets' sort and search fields. A failing game module or collector only loses its own names.
+-- Bumps `names_revision`, which tells the query module to rebuild its name-based orders.
+-- tab: assets asset model built by `build`
+-- treturn: int number of named assets, 0 when the names were resolved before
 function Assets.resolve_names(assets)
     if assets.names_resolved then
         return 0
@@ -455,6 +550,9 @@ end
 -- Copy formats
 -- ----------------------------------------------------------------------------
 
+--- Returns the asset's path as a quoted Lua string, cached on the asset.
+-- tab: asset asset record
+-- treturn: string
 function Assets.lua_string(asset)
     local text = asset.lua_string
 
@@ -466,6 +564,10 @@ function Assets.lua_string(asset)
     return text
 end
 
+--- Returns a texture pass snippet for the asset's material (`UI_SNIPPET_FORMAT`), cached on the
+-- asset.
+-- tab: asset asset record
+-- treturn: string
 function Assets.ui_snippet(asset)
     local text = asset.ui_snippet
 

@@ -1,9 +1,37 @@
+--- The Icon Browser view; a full-screen, terminal-style browser of the indexed UI materials.
+-- A `BaseView` laid out from the screen size in UI units: the frame takes about 95 % of the width
+-- and ends just above the game's input legend, shrunk by the Window Size setting and moved by the
+-- offsets, which are clamped so it stays on screen. It holds a header with the title, status, asset
+-- count and toolbar (search field, category and sort menus, favorites and recent filters, grid/list
+-- and density toggles), the asset browser and a persistent inspector with preview, metadata and
+-- copy actions.
+--
+-- The browser is virtualized: a pool of slot widgets covering the visible cells is rebuilt only when
+-- the slot geometry changes and rebound to the window of query results the scrollbar shows, with
+-- row-snapped scrolling. A click selects an asset, which fills the inspector; copying is explicit
+-- (inspector buttons, double-click, Ctrl+C or C). Arrow keys move a keyboard focus that Enter
+-- selects, Ctrl+F focuses the search field, F toggles the favorite, and Esc leaves the search field,
+-- then an open menu, then the view; no shortcut fires while the search field has focus.
+--
+-- Every widget that draws an indexed material (tiles, list rows, the inspector preview) is drawn
+-- inside `pcall`; a failing material is reported once through `mod.mark_icon_render_failed`, shown
+-- with a fallback and stays selectable and copyable. Chrome widgets are drawn inside `pcall` as
+-- well, so a missing shared material only hides that widget.
+--
+-- Loaded through the `package.preload` loader that `IconBrowser.lua` registers for the view's
+-- module path, and returned as the `IconBrowserView` class. Reads the asset model from
+-- `mod._assets`, the query module from `mod._query_module`, its look from
+-- `icon_browser_view_definitions.lua`, and its settings, favorites, history and session state
+-- through the functions and fields on `mod`.
+-- classmod: IconBrowserView
+-- author: LucLeto
 local mod = get_mod("IconBrowser")
 
 local UIRenderer = require("scripts/managers/ui/ui_renderer")
 local UIWidget = require("scripts/managers/ui/ui_widget")
 local ViewElementInputLegend = require("scripts/ui/view_elements/view_element_input_legend/view_element_input_legend")
 
+--- The view's look and structure, and the asset and query modules loaded by `IconBrowser.lua`.
 local Definitions = mod:io_dofile("IconBrowser/scripts/mods/IconBrowser/icon_browser_view_definitions")
 local Assets = mod._assets_module
 local Query = mod._query_module
@@ -21,6 +49,12 @@ local table_clear = table.clear
 local tostring = tostring
 local type = type
 
+-- ----------------------------------------------------------------------------
+-- Constants
+-- ----------------------------------------------------------------------------
+
+--- Definition tables and helpers shared with `icon_browser_view_definitions.lua`, and the
+-- upper-case function for titles.
 local LAYOUT = Definitions.LAYOUT
 local DENSITIES = Definitions.DENSITIES
 local PALETTE = Definitions.PALETTE
@@ -31,22 +65,28 @@ local TOOLBAR_NODES = Definitions.TOOLBAR_NODES
 local copy_color = Definitions.copy_color
 local upper = Utf8 and Utf8.upper or string.upper
 
+--- Name of the view, as `IconBrowser.lua` registers it.
 local VIEW_NAME = "icon_browser_view"
+--- Seconds a status message stays in the header, and the last part of it in which it fades out.
 local COPY_STATUS_DURATION = 2
 local COPY_STATUS_FADE_DURATION = 0.25
+--- Seconds an asset must stay hovered before its tooltip shows.
 local TOOLTIP_DELAY = 0.4
--- Ctrl+F focuses the search field this many updates later, so the "f" keystroke of the shortcut
+--- Ctrl+F focuses the search field this many updates later, so the "f" keystroke of the shortcut
 -- is consumed before the text field starts reading keystrokes.
 local SEARCH_FOCUS_DELAY = 2
+--- Rows scrolled per mouse wheel notch in the grid and in the list.
 local GRID_ROWS_PER_SCROLL = 1
 local LIST_ROWS_PER_SCROLL = 3
--- One wheel notch moves `scroll_amount * 0.8 / 1.5` of the range in the terminal scrollbar.
+--- One wheel notch moves `scroll_amount * 0.8 / 1.5` of the range in the terminal scrollbar.
 local SCROLL_NOTCH_FACTOR = 1.875
+--- Ellipsis appended to cropped text.
 local CROP_SUFFIX = "..."
--- Slack in UI units between the measured text and its box, so measuring and drawing can never
+--- Slack in UI units between the measured text and its box, so measuring and drawing can never
 -- disagree about a line fitting.
 local CROP_MARGIN = 4
 
+--- Widths of the toolbar controls, in the order of `TOOLBAR_NODES`.
 local TOOLBAR_WIDTHS = {
     LAYOUT.toolbar.category,
     LAYOUT.toolbar.sort,
@@ -60,6 +100,7 @@ local TOOLBAR_WIDTHS = {
     LAYOUT.toolbar.density,
 }
 
+--- Inspector widgets shown only while an asset is selected.
 local INSPECTOR_CONTENT_WIDGETS = {
     "inspector_title",
     "inspector_subtitle",
@@ -70,6 +111,7 @@ local INSPECTOR_CONTENT_WIDGETS = {
     "preview_aspect_button",
 }
 
+--- Inspector buttons disabled while no asset is selected.
 local INSPECTOR_ACTION_WIDGETS = {
     "copy_path_button",
     "copy_filename_button",
@@ -78,6 +120,7 @@ local INSPECTOR_ACTION_WIDGETS = {
     "favorite_button",
 }
 
+--- Widgets of the list column header, shown only in the list view.
 local LIST_HEADER_WIDGETS = {
     "list_header_background",
     "list_header_preview",
@@ -87,15 +130,28 @@ local LIST_HEADER_WIDGETS = {
     "list_header_path",
 }
 
+-- ----------------------------------------------------------------------------
+-- Helpers
+-- ----------------------------------------------------------------------------
+
+--- Text markup that colours the text after it, up to `RESET_TAG`.
+-- tab: color `{ a, r, g, b }` colour
+-- treturn: string
 local function _color_tag(color)
     return format("{#color(%d,%d,%d)}", color[2], color[3], color[4])
 end
 
+--- Colour markup of the inspector metadata: field labels, values, warnings, and the reset.
 local LABEL_TAG = _color_tag(PALETTE.text_sub_header)
 local VALUE_TAG = _color_tag(PALETTE.text_header)
 local WARNING_TAG = _color_tag(PALETTE.status_error)
 local RESET_TAG = "{#reset()}"
 
+--- Clamps a value into a range.
+-- number: value value to clamp
+-- number: min_value lower bound
+-- number: max_value upper bound
+-- treturn: number
 local function _clamp(value, min_value, max_value)
     if value < min_value then
         return min_value
@@ -106,9 +162,12 @@ local function _clamp(value, min_value, max_value)
     return value
 end
 
+--- Keyboard indices cached by `_keyboard_keys_lookup`; nil until its first call.
 local _keyboard_keys
 
 --- Raw keyboard indices for Ctrl+F / Ctrl+C, resolved once; `false` when the engine API is missing.
+-- A missing right Ctrl key only disables that key.
+-- treturn: tab|bool `left_ctrl`, `right_ctrl`, `f` and `c` indices, or false
 local function _keyboard_keys_lookup()
     if _keyboard_keys == nil then
         _keyboard_keys = false
@@ -136,6 +195,9 @@ local function _keyboard_keys_lookup()
     return _keyboard_keys
 end
 
+--- Returns whether either Ctrl key is held.
+-- tab: keys indices from `_keyboard_keys_lookup`
+-- treturn: bool
 local function _ctrl_down(keys)
     local keyboard = Keyboard
 
@@ -148,8 +210,15 @@ local function _ctrl_down(keys)
     return right_ctrl and keyboard.button(right_ctrl) > 0.5 or false
 end
 
+--- The view class.
 local IconBrowserView = class("IconBrowserView", "BaseView")
 
+-- ----------------------------------------------------------------------------
+-- Lifecycle
+-- ----------------------------------------------------------------------------
+
+--- Creates the view's definitions and state; its widgets only exist from `on_enter` on.
+-- tab: settings view settings from `Views`
 IconBrowserView.init = function(self, settings)
     local definitions = Definitions.create(upper)
 
@@ -267,6 +336,8 @@ IconBrowserView.init = function(self, settings)
     }
 end
 
+--- Sets up the legend, the preview widgets and the callbacks, resolves the localized names on the
+-- first opening, restores the saved filters, search text and selection, and applies the layout.
 function IconBrowserView.on_enter(self)
     IconBrowserView.super.on_enter(self)
     mod._icon_browser_view_open = true
@@ -293,6 +364,8 @@ function IconBrowserView.on_enter(self)
     self:_update_copy_status_widget()
 end
 
+--- Saves the session state, destroys the slot, menu and preview widgets, writes changed favorites
+-- and history to disk, and removes the input legend.
 function IconBrowserView.on_exit(self)
     mod._icon_browser_view_open = false
 
@@ -324,6 +397,8 @@ function IconBrowserView.on_exit(self)
     IconBrowserView.super.on_exit(self)
 end
 
+--- Re-applies the layout after the resolution or the UI scale changed.
+-- number: scale new render scale
 function IconBrowserView.on_resolution_modified(self, scale)
     IconBrowserView.super.on_resolution_modified(self, scale)
 
@@ -336,6 +411,8 @@ end
 -- Setup
 -- ----------------------------------------------------------------------------
 
+--- Adds the input legend with the entries from the definitions; an entry with a visibility function
+-- is hidden, and its hotkey ignored, while that function returns false.
 function IconBrowserView._setup_input_legend(self)
     local input_legend_element = self:_add_element(ViewElementInputLegend, "input_legend", 10)
     local legend_inputs = self._definitions.legend_inputs
@@ -354,6 +431,7 @@ function IconBrowserView._setup_input_legend(self)
     end
 end
 
+--- Creates the inspector preview widgets, which `draw` renders itself inside `pcall`.
 function IconBrowserView._create_preview_widgets(self)
     local preview_widgets = self._preview_widgets
 
@@ -370,6 +448,7 @@ function IconBrowserView._create_preview_widgets(self)
     fallback_content.has_asset = false
 end
 
+--- Destroys the inspector preview widgets.
 function IconBrowserView._destroy_preview_widgets(self)
     local ui_renderer = self._ui_renderer
     local preview_widgets = self._preview_widgets
@@ -380,6 +459,10 @@ function IconBrowserView._destroy_preview_widgets(self)
     end
 end
 
+--- Sets a button's pressed callback to a method of the view.
+-- string: widget_name name of the button widget
+-- string: callback_name method name
+-- ?param: argument value bound as the method's first argument
 function IconBrowserView._bind_button(self, widget_name, callback_name, argument)
     local hotspot = self._widgets_by_name[widget_name].content.hotspot
 
@@ -390,6 +473,7 @@ function IconBrowserView._bind_button(self, widget_name, callback_name, argument
     end
 end
 
+--- Binds the toolbar, list header, preview control and inspector buttons to their callbacks.
 function IconBrowserView._setup_callbacks(self)
     self:_bind_button("search_clear", "cb_on_clear_search_pressed")
     self:_bind_button("category_button", "cb_on_dropdown_pressed", "category")
@@ -417,6 +501,8 @@ function IconBrowserView._setup_callbacks(self)
 end
 
 --- Restores the persisted filter preferences and the session's search text and selection.
+-- The favorites and recent filters exclude each other; a saved selection that is no longer indexed
+-- is dropped.
 function IconBrowserView._restore_state(self)
     local state = self._query_state
     local session = mod._icon_browser_session
@@ -447,6 +533,12 @@ end
 -- Layout
 -- ----------------------------------------------------------------------------
 
+--- Sets a scenegraph node's position and size; callers update the scenegraph afterwards.
+-- string: scenegraph_id node id
+-- number: x horizontal position relative to the parent
+-- number: y vertical position relative to the parent
+-- number: width node width
+-- number: height node height
 function IconBrowserView._place(self, scenegraph_id, x, y, width, height)
     local node = self._ui_scenegraph[scenegraph_id]
     local position = node.position
@@ -460,6 +552,8 @@ end
 
 --- Screen-relative layout: frame, header, browser, inspector and slot pool. Runs on open, on
 -- resolution changes and when a layout setting changed (`mod._layout_revision`), never per frame.
+-- The frame's minimum height is what the inspector needs, so its controls are never clipped.
+-- ?bool: force apply even when the layout revision did not change
 function IconBrowserView._apply_layout(self, force)
     local revision = mod._layout_revision
 
@@ -530,6 +624,8 @@ function IconBrowserView._apply_layout(self, force)
 end
 
 --- Title row plus toolbar; the toolbar wraps below the search field when it would get too narrow.
+-- number: frame_width frame width in UI units
+-- treturn: number header height
 function IconBrowserView._layout_header(self, frame_width)
     local padding = LAYOUT.padding
     local toolbar = LAYOUT.toolbar
@@ -583,6 +679,8 @@ end
 
 --- Browser area and slot geometry: grid columns fill the width for the density's target tile size,
 -- rows are rounded so whole rows fill the height; list rows likewise.
+-- number: width browser panel width
+-- number: height browser panel height
 function IconBrowserView._layout_browser(self, width, height)
     local area_padding = LAYOUT.area_padding
     local scrollbar_width = LAYOUT.scrollbar_width
@@ -647,6 +745,10 @@ function IconBrowserView._layout_browser(self, width, height)
     self:_ensure_slots(is_list and "list" or "grid", columns, rows, slot_width, slot_height, density)
 end
 
+--- Lays out the list columns and their headers: the preview, shares of the width for the name and
+-- the category, a fixed ID column and the rest for the path.
+-- number: area_width width of the browser area
+-- number: row_height list row height
 function IconBrowserView._layout_list_columns(self, area_width, row_height)
     local columns = self._list_columns
     local spacing = 12
@@ -682,6 +784,13 @@ function IconBrowserView._layout_list_columns(self, area_width, row_height)
 end
 
 --- Rebuilds the slot pool only when the slot geometry changed; slots are placed once and rebound.
+-- A rebuild also drops the cached cropped texts, which depend on the slot size.
+-- string: kind `grid` or `list`
+-- int: columns slots per row
+-- int: rows visible rows
+-- number: slot_width slot width
+-- number: slot_height slot height
+-- tab: density entry of `Definitions.DENSITIES`
 function IconBrowserView._ensure_slots(self, kind, columns, rows, slot_width, slot_height, density)
     local count = columns * rows
 
@@ -741,6 +850,7 @@ function IconBrowserView._ensure_slots(self, kind, columns, rows, slot_width, sl
     table_clear(self._path_cache)
 end
 
+--- Destroys the slot pool and forgets the hovered slot.
 function IconBrowserView._destroy_slots(self)
     local slots = self._slots
     local ui_renderer = self._ui_renderer
@@ -758,6 +868,8 @@ end
 
 --- Inspector: buttons are anchored to the bottom, metadata above them, and the preview takes the
 -- remaining height (at most square), so the actions are never pushed out of the panel.
+-- number: width inspector panel width
+-- number: height inspector panel height
 function IconBrowserView._layout_inspector(self, width, height)
     local inspector = LAYOUT.inspector
     local padding = inspector.padding
@@ -866,6 +978,7 @@ end
 -- Popup menus
 -- ----------------------------------------------------------------------------
 
+--- Destroys the option widgets of both popup menus.
 function IconBrowserView._destroy_popup_options(self)
     local ui_renderer = self._ui_renderer
 
@@ -879,6 +992,8 @@ function IconBrowserView._destroy_popup_options(self)
     end
 end
 
+--- Builds the options of the category menu, each labelled with its asset count, and of the sort
+-- menu, at least as wide as their toolbar buttons.
 function IconBrowserView._build_popup_options(self)
     self:_destroy_popup_options()
 
@@ -928,6 +1043,9 @@ function IconBrowserView._build_popup_options(self)
     self._popup_widths.sort = sort_width
 end
 
+--- Opens a popup menu below its toolbar button; leaves the search field and closes any other menu
+-- and the tooltip first.
+-- string: popup_id `category` or `sort`
 function IconBrowserView._open_popup_menu(self, popup_id)
     self:_stop_search_input()
     self:_close_popup()
@@ -948,6 +1066,7 @@ function IconBrowserView._open_popup_menu(self, popup_id)
     self:_hide_tooltip()
 end
 
+--- Closes the open popup menu, if any.
 function IconBrowserView._close_popup(self)
     local popup_id = self._open_popup
 
@@ -960,6 +1079,7 @@ function IconBrowserView._close_popup(self)
     self._widgets_by_name[popup_id .. "_button"].content.hotspot.is_selected = false
 end
 
+--- Marks the option of the open menu that matches the active category or sort.
 function IconBrowserView._refresh_popup_selection(self)
     local popup_id = self._open_popup
 
@@ -978,6 +1098,8 @@ function IconBrowserView._refresh_popup_selection(self)
     end
 end
 
+--- Returns whether the cursor is over an option of the open menu.
+-- treturn: bool
 function IconBrowserView._popup_hovered(self)
     local popup_id = self._open_popup
     local options = self._popup_options[popup_id]
@@ -995,12 +1117,16 @@ end
 -- Search field
 -- ----------------------------------------------------------------------------
 
+--- Returns whether the search field has focus.
+-- treturn: bool
 function IconBrowserView._is_typing(self)
     local search_content = self._search_content
 
     return search_content ~= nil and search_content.is_writing == true
 end
 
+--- Returns whether shortcuts are blocked, because the search field has focus or a menu is open.
+-- treturn: bool
 function IconBrowserView._input_blocked(self)
     return self._open_popup ~= nil or self:_is_typing()
 end
@@ -1027,6 +1153,8 @@ function IconBrowserView._stop_search_input(self)
     search_content.is_writing = false
 end
 
+--- Switches the input method editor used to type languages such as Chinese or Japanese.
+-- bool: enabled whether the IME is enabled
 function IconBrowserView._set_ime_enabled(self, enabled)
     local window = Window
 
@@ -1035,6 +1163,8 @@ function IconBrowserView._set_ime_enabled(self, enabled)
     end
 end
 
+--- Applies a pending Ctrl+F focus once its delay ran out, shows the focused field's gold outline,
+-- and closes the open menu and switches the IME when the focus changes.
 function IconBrowserView._update_search_focus(self)
     local search_content = self._search_content
     local pending = self._pending_search_focus
@@ -1068,6 +1198,7 @@ function IconBrowserView._update_search_focus(self)
 end
 
 --- Polls the search text (one string comparison per frame) and re-runs the query on change.
+-- While the field shows a pending select-all, the selected text counts as the search text.
 function IconBrowserView._sync_search_text(self)
     local search_content = self._search_content
     local text = search_content.input_text or ""
@@ -1092,6 +1223,9 @@ end
 -- Query, scroll and binding
 -- ----------------------------------------------------------------------------
 
+--- Returns the position of an asset in the current results.
+-- ?tab: asset asset record
+-- treturn: ?int
 function IconBrowserView._index_of(self, asset)
     if not asset then
         return nil
@@ -1108,6 +1242,8 @@ function IconBrowserView._index_of(self, asset)
     return nil
 end
 
+--- Runs the query and refreshes what depends on the results: the focus position, the scrollbar, the
+-- scroll position, the slot binding, the asset count and the empty-results message.
 function IconBrowserView._run_query(self)
     self._results_dirty = false
 
@@ -1161,6 +1297,8 @@ function IconBrowserView._run_query(self)
     end
 end
 
+--- Sizes the scrollbar for the result rows and sets the wheel step: one row per notch in the grid,
+-- three in the list.
 function IconBrowserView._update_scrollbar_metrics(self)
     local columns = self._columns
     local visible_rows = self._visible_rows
@@ -1182,6 +1320,8 @@ function IconBrowserView._update_scrollbar_metrics(self)
     end
 end
 
+--- Returns the first visible row for the scrollbar position, snapped to whole rows.
+-- treturn: int zero-based row
 function IconBrowserView._current_first_row(self)
     local max_first_row = self._max_first_row
 
@@ -1194,6 +1334,8 @@ function IconBrowserView._current_first_row(self)
     return _clamp(floor(value * max_first_row + 0.5), 0, max_first_row)
 end
 
+--- Scrolls so that a row is the first visible one.
+-- int: row zero-based row
 function IconBrowserView._set_scroll_row(self, row)
     local max_first_row = self._max_first_row
     local content = self._widgets_by_name.scrollbar.content
@@ -1203,6 +1345,8 @@ function IconBrowserView._set_scroll_row(self, row)
     content.scroll_add = nil
 end
 
+--- Scrolls just far enough to show a result.
+-- int: index position in the results
 function IconBrowserView._scroll_to_index(self, index)
     local row = floor((index - 1) / self._columns)
     local first_row = self:_current_first_row()
@@ -1214,6 +1358,8 @@ function IconBrowserView._scroll_to_index(self, index)
     end
 end
 
+--- Rebinds the slots when the first visible row changed or a rebind is pending; hides the tooltip
+-- while scrolling.
 function IconBrowserView._update_scroll(self)
     local first_row = self:_current_first_row()
 
@@ -1232,6 +1378,9 @@ function IconBrowserView._update_scroll(self)
 end
 
 --- Single-line width of `text` in UI units (fonts scale linearly with the render scale), or nil.
+-- string: text text to measure
+-- tab: style text style with `font_type` and `font_size`
+-- treturn: ?number
 function IconBrowserView._text_width(self, text, style)
     local ok, width = pcall(UIRenderer.text_size, self._ui_renderer, text, style.font_type, style.font_size, nil, nil,
         true)
@@ -1243,6 +1392,11 @@ end
 -- `crop_text_width` checks the width before appending its "...", so its result can overflow the box
 -- and the engine then wraps it at the last space; this binary search measures with the suffix, keeps
 -- a small margin, and drops spaces next to the ellipsis so it can never end up alone on a line.
+-- string: text text to fit
+-- tab: style text style it is drawn with
+-- number: max_width box width in UI units
+-- ?bool: crop_from_left keep the end of the text instead of its start, for paths
+-- treturn: string
 function IconBrowserView._fit_text(self, text, style, max_width, crop_from_left)
     local limit = max_width - CROP_MARGIN
     local width = self:_text_width(text, style)
@@ -1283,6 +1437,13 @@ function IconBrowserView._fit_text(self, text, style, max_width, crop_from_left)
 end
 
 --- Cropped display text per asset, measured once per slot layout and then reused while scrolling.
+-- tab: cache cropped texts by browser ID
+-- tab: asset asset the text belongs to
+-- string: text text to fit
+-- tab: style text style it is drawn with
+-- number: max_width box width in UI units
+-- ?bool: crop_from_left keep the end of the text, for paths
+-- treturn: string
 function IconBrowserView._cropped_text(self, cache, asset, text, style, max_width, crop_from_left)
     local cropped = cache[asset.id]
 
@@ -1376,6 +1537,11 @@ end
 -- Selection, focus and actions
 -- ----------------------------------------------------------------------------
 
+--- Selects an asset, which also moves the keyboard focus to it, and refreshes the slots and the
+-- inspector; the clipboard is never touched.
+-- ?tab: asset asset record, nil to clear the selection
+-- ?int: index its position in the results
+-- ?bool: record_recent add it to the recent history
 function IconBrowserView._select_asset(self, asset, index, record_recent)
     self._selected_asset = asset
     self._focus_asset = asset
@@ -1389,6 +1555,10 @@ function IconBrowserView._select_asset(self, asset, index, record_recent)
     end
 end
 
+--- Moves the keyboard focus through the results and scrolls it into view; without a focus it
+-- starts at the first visible result.
+-- int: delta_x step within a row, -1, 0 or 1
+-- int: delta_y step in rows, -1, 0 or 1
 function IconBrowserView._move_focus(self, delta_x, delta_y)
     local count = self._result_count
 
@@ -1414,6 +1584,8 @@ function IconBrowserView._move_focus(self, delta_x, delta_y)
     self:_scroll_to_index(index)
 end
 
+--- Copies a format of the selected asset, records it in the recent history and shows the status.
+-- string: copy_format `path`, `filename`, `lua_string` or `ui_snippet`
 function IconBrowserView._copy_selected(self, copy_format)
     local asset = self._selected_asset
 
@@ -1442,6 +1614,7 @@ function IconBrowserView._copy_selected(self, copy_format)
     self:_set_copy_status(copied and status_text[copy_format] or status_text.failed, not copied)
 end
 
+--- Toggles the selected asset's favorite and shows the status.
 function IconBrowserView._toggle_selected_favorite(self)
     local asset = self._selected_asset
 
@@ -1454,6 +1627,8 @@ function IconBrowserView._toggle_selected_favorite(self)
     self:_set_copy_status(self._status_text[is_favorite and "favorite_added" or "favorite_removed"], false)
 end
 
+--- Pressed callback of a slot; leaves the search field and selects the slot's asset.
+-- int: slot_index slot in the pool
 function IconBrowserView.cb_on_slot_pressed(self, slot_index)
     local widget = self._slots[slot_index]
     local asset = widget and widget.content.asset
@@ -1467,6 +1642,8 @@ function IconBrowserView.cb_on_slot_pressed(self, slot_index)
 end
 
 --- The hotspot calls this instead of `pressed_callback` for the second click of a double click.
+-- Selects the slot's asset and copies its path when the Double-Click Copies Path setting is on.
+-- int: slot_index slot in the pool
 function IconBrowserView.cb_on_slot_double_clicked(self, slot_index)
     local widget = self._slots[slot_index]
     local asset = widget and widget.content.asset
@@ -1488,16 +1665,22 @@ end
 -- Legend and toolbar callbacks
 -- ----------------------------------------------------------------------------
 
+--- Legend visibility of Enter: shown while the keyboard focus is on an asset that is not selected.
+-- treturn: bool
 function IconBrowserView.legend_select_visible(self)
     local focus_asset = self._focus_asset
 
     return not self:_input_blocked() and focus_asset ~= nil and focus_asset ~= self._selected_asset
 end
 
+--- Legend visibility of C: shown for a selection while the C key copies.
+-- treturn: bool
 function IconBrowserView.legend_copy_visible(self)
     return self._copy_hotkey_enabled and self._selected_asset ~= nil and not self:_input_blocked()
 end
 
+--- Legend visibility of F: shown for a selection.
+-- treturn: bool
 function IconBrowserView.legend_favorite_visible(self)
     return self._selected_asset ~= nil and not self:_input_blocked()
 end
@@ -1513,6 +1696,7 @@ function IconBrowserView.cb_on_back_pressed(self)
     end
 end
 
+--- Legend callback of Enter; selects the focused asset.
 function IconBrowserView.cb_on_select_pressed(self)
     local focus_asset = self._focus_asset
 
@@ -1523,6 +1707,8 @@ function IconBrowserView.cb_on_select_pressed(self)
     self:_select_asset(focus_asset, self._focus_index, true)
 end
 
+--- Legend callback of C; copies the selected path. Ignored with Ctrl held, as Ctrl+C is handled in
+-- `_handle_input`, and while shortcuts are blocked or the C key setting is off.
 function IconBrowserView.cb_on_copy_hotkey_pressed(self)
     local keys = _keyboard_keys_lookup()
 
@@ -1533,6 +1719,8 @@ function IconBrowserView.cb_on_copy_hotkey_pressed(self)
     self:_copy_selected("path")
 end
 
+--- Legend callback of F; toggles the selected asset's favorite. Ignored with Ctrl held, so Ctrl+F
+-- does not toggle it, and while shortcuts are blocked.
 function IconBrowserView.cb_on_favorite_hotkey_pressed(self)
     local keys = _keyboard_keys_lookup()
 
@@ -1543,6 +1731,7 @@ function IconBrowserView.cb_on_favorite_hotkey_pressed(self)
     self:_toggle_selected_favorite()
 end
 
+--- Clears the search field and keeps its focus.
 function IconBrowserView.cb_on_clear_search_pressed(self)
     local search_content = self._search_content
 
@@ -1554,6 +1743,8 @@ function IconBrowserView.cb_on_clear_search_pressed(self)
     search_content.force_caret_update = true
 end
 
+--- Opens or closes the category or sort menu.
+-- string: popup_id `category` or `sort`
 function IconBrowserView.cb_on_dropdown_pressed(self, popup_id)
     if self._open_popup == popup_id then
         self:_close_popup()
@@ -1562,6 +1753,8 @@ function IconBrowserView.cb_on_dropdown_pressed(self, popup_id)
     end
 end
 
+--- Applies and saves a category chosen in the menu.
+-- string: category_id category id of `Assets.CATEGORIES`
 function IconBrowserView.cb_on_category_option_pressed(self, category_id)
     local state = self._query_state
 
@@ -1577,6 +1770,8 @@ function IconBrowserView.cb_on_category_option_pressed(self, category_id)
     self:_refresh_toolbar()
 end
 
+--- Applies and saves a sort and keeps the selection in view.
+-- string: sort_id sort id of `Query.SORTS`
 function IconBrowserView._apply_sort(self, sort_id)
     local state = self._query_state
 
@@ -1591,16 +1786,21 @@ function IconBrowserView._apply_sort(self, sort_id)
     self:_refresh_toolbar()
 end
 
+--- Applies a sort chosen in the menu.
+-- string: sort_id sort id of `Query.SORTS`
 function IconBrowserView.cb_on_sort_option_pressed(self, sort_id)
     self:_close_popup()
     self:_apply_sort(sort_id)
 end
 
+--- Sorts by a list column, ascending first and descending on a second click.
+-- string: sort_key `name`, `index`, `category` or `path`
 function IconBrowserView.cb_on_column_pressed(self, sort_key)
     self:_stop_search_input()
     self:_apply_sort(Query.toggle_sort(self._query_state.sort, sort_key))
 end
 
+--- Toggles the favorites filter; switching it on switches the recent filter off.
 function IconBrowserView.cb_on_favorites_filter_pressed(self)
     local state = self._query_state
 
@@ -1616,6 +1816,7 @@ function IconBrowserView.cb_on_favorites_filter_pressed(self)
     self:_refresh_toolbar()
 end
 
+--- Toggles the recent filter; switching it on switches the favorites filter off.
 function IconBrowserView.cb_on_recent_filter_pressed(self)
     local state = self._query_state
 
@@ -1631,11 +1832,14 @@ function IconBrowserView.cb_on_recent_filter_pressed(self)
     self:_refresh_toolbar()
 end
 
+--- Empties the recent history.
 function IconBrowserView.cb_on_clear_recent_pressed(self)
     mod.clear_recent_icons()
     self:_set_copy_status(self._status_text.recent_cleared, false)
 end
 
+--- Switches between grid and list; the layout follows on the next update.
+-- string: view_mode `grid` or `list`
 function IconBrowserView.cb_on_view_mode_pressed(self, view_mode)
     self:_stop_search_input()
 
@@ -1644,6 +1848,8 @@ function IconBrowserView.cb_on_view_mode_pressed(self, view_mode)
     end
 end
 
+--- Switches the thumbnail density; the layout follows on the next update.
+-- string: density `compact`, `normal` or `large`
 function IconBrowserView.cb_on_density_pressed(self, density)
     self:_stop_search_input()
 
@@ -1652,6 +1858,7 @@ function IconBrowserView.cb_on_density_pressed(self, density)
     end
 end
 
+--- Cycles and saves the preview background: dark, light, checkerboard.
 function IconBrowserView.cb_on_preview_background_pressed(self)
     local current = self._preview_background
     local next_index = 1
@@ -1668,11 +1875,13 @@ function IconBrowserView.cb_on_preview_background_pressed(self)
     self:_refresh_preview_controls()
 end
 
+--- Cycles the preview zoom: fit, 2x, 4x.
 function IconBrowserView.cb_on_preview_zoom_pressed(self)
     self._preview_zoom_index = self._preview_zoom_index % #ZOOM_LEVELS + 1
     self:_refresh_preview_controls()
 end
 
+--- Cycles the preview's display aspect and fits the icon to it.
 function IconBrowserView.cb_on_preview_aspect_pressed(self)
     self._preview_aspect_index = self._preview_aspect_index % #ASPECTS + 1
     self:_layout_preview()
@@ -1680,10 +1889,13 @@ function IconBrowserView.cb_on_preview_aspect_pressed(self)
     self:_refresh_preview_controls()
 end
 
+--- Pressed callback of the inspector's copy buttons.
+-- string: copy_format `path`, `filename`, `lua_string` or `ui_snippet`
 function IconBrowserView.cb_on_copy_pressed(self, copy_format)
     self:_copy_selected(copy_format)
 end
 
+--- Pressed callback of the inspector's favorite button.
 function IconBrowserView.cb_on_favorite_pressed(self)
     self:_toggle_selected_favorite()
 end
@@ -1692,6 +1904,12 @@ end
 -- Toolbar and inspector presentation
 -- ----------------------------------------------------------------------------
 
+--- Labels a list column header, with the sort direction when it is the sorted column.
+-- string: widget_name header widget
+-- string: label_id localization id of the column name
+-- string: key sort key of the column
+-- ?string: sort_key sort key of the active sort
+-- bool: descending whether the active sort descends
 function IconBrowserView._set_column_header(self, widget_name, label_id, key, sort_key, descending)
     local content = self._widgets_by_name[widget_name].content
     local label = upper(mod:localize(label_id))
@@ -1714,6 +1932,8 @@ function IconBrowserView._set_column_header(self, widget_name, label_id, key, so
 end
 
 --- Dropdown values are cropped once when they change instead of fitting the font every frame.
+-- string: widget_name dropdown button widget
+-- string: text value to show
 function IconBrowserView._set_dropdown_text(self, widget_name, text)
     local widget = self._widgets_by_name[widget_name]
     local max_width = self._ui_scenegraph[widget_name].size[1] - 24
@@ -1721,6 +1941,7 @@ function IconBrowserView._set_dropdown_text(self, widget_name, text)
     widget.content.text = self:_fit_text(text, widget.style.text, max_width, false)
 end
 
+--- Updates the toolbar's values and toggle states, the clear buttons and the list column headers.
 function IconBrowserView._refresh_toolbar(self)
     local widgets_by_name = self._widgets_by_name
     local state = self._query_state
@@ -1747,6 +1968,7 @@ function IconBrowserView._refresh_toolbar(self)
     self:_set_column_header("list_header_path", "column_path", "path", sort_key, descending)
 end
 
+--- Labels the preview controls and applies the background colour and the zoom's texture coordinates.
 function IconBrowserView._refresh_preview_controls(self)
     local widgets_by_name = self._widgets_by_name
     local background = self._preview_background
@@ -1777,6 +1999,12 @@ function IconBrowserView._refresh_preview_controls(self)
 end
 
 --- Path split into lines at "/" so it wraps inside the inspector; copying always uses the full path.
+-- string: path material path
+-- tab: style metadata text style
+-- number: max_width line width in UI units
+-- tab: lines array the coloured lines are written into
+-- int: count lines already written
+-- treturn: int lines written afterwards
 function IconBrowserView._append_path_lines(self, path, style, max_width, lines, count)
     local line = ""
     local limit = max_width - CROP_MARGIN
@@ -1808,6 +2036,11 @@ function IconBrowserView._append_path_lines(self, path, style, max_width, lines,
     return count
 end
 
+--- Builds the inspector's metadata text: the wrapped path, filename, browser ID, category, name
+-- source, preview status and native size, with coloured labels.
+-- tab: asset selected asset
+-- bool: preview_available whether its preview may be drawn
+-- treturn: string
 function IconBrowserView._build_metadata(self, asset, preview_available)
     local labels = self._field_labels
     local lines = self._metadata_lines
@@ -1842,6 +2075,8 @@ function IconBrowserView._build_metadata(self, asset, preview_available)
     return concat(lines, "\n", 1, count)
 end
 
+--- Fills the inspector from the selection; without one it shows the empty state and disables the
+-- actions.
 function IconBrowserView._refresh_inspector(self)
     self._inspector_dirty = false
 
@@ -1893,6 +2128,7 @@ end
 -- Tooltip and status
 -- ----------------------------------------------------------------------------
 
+--- Hides the hover tooltip.
 function IconBrowserView._hide_tooltip(self)
     local widget = self._widgets_by_name.tooltip
 
@@ -1903,6 +2139,10 @@ function IconBrowserView._hide_tooltip(self)
     self._tooltip_shown = false
 end
 
+--- Shows the full path of a hovered asset below its slot, or above it near the bottom of the
+-- browser; a path too long for the browser is cropped from the left.
+-- tab: asset hovered asset
+-- ?int: slot_index slot it is shown in
 function IconBrowserView._show_tooltip(self, asset, slot_index)
     local slot = slot_index and self._slots[slot_index]
 
@@ -1943,6 +2183,9 @@ function IconBrowserView._show_tooltip(self, asset, slot_index)
     self._tooltip_shown = true
 end
 
+--- Shows the tooltip once the same asset stayed hovered for `TOOLTIP_DELAY` seconds, and hides it
+-- when the hover moves.
+-- number: dt frame delta time
 function IconBrowserView._update_tooltip(self, dt)
     local asset = self._hovered_asset
 
@@ -1968,6 +2211,9 @@ function IconBrowserView._update_tooltip(self, dt)
     end
 end
 
+--- Shows a status message in the header, which fades out after `COPY_STATUS_DURATION` seconds.
+-- ?string: message status text
+-- ?bool: is_error show it in the error colour
 function IconBrowserView._set_copy_status(self, message, is_error)
     self._copy_status_message = message or ""
     self._copy_status_is_error = is_error == true
@@ -1975,6 +2221,7 @@ function IconBrowserView._set_copy_status(self, message, is_error)
     self:_update_copy_status_widget()
 end
 
+--- Writes the status text, its colour and its fading alpha into the header widget.
 function IconBrowserView._update_copy_status_widget(self)
     local widget = self._widgets_by_name.copy_status_text
 
@@ -2009,6 +2256,13 @@ end
 -- Input, update and draw
 -- ----------------------------------------------------------------------------
 
+--- Handles keyboard and mouse input each frame. While the search field has focus, only Enter is
+-- handled, leaving the field. Otherwise Ctrl+F focuses the field and Ctrl+C copies the path, a
+-- click outside an open menu closes it without reaching the widgets below, and the arrow keys
+-- move the focus.
+-- tab: input_service view input service
+-- number: dt frame delta time
+-- number: t time
 function IconBrowserView._handle_input(self, input_service, dt, t)
     if self:_is_typing() then
         if input_service:get("confirm_pressed") then
@@ -2055,6 +2309,9 @@ function IconBrowserView._handle_input(self, input_service, dt, t)
     end
 end
 
+--- Stops drawing a widget's icon after a draw error and records the failure for its path.
+-- tab: widget slot or preview widget
+-- ?param: error_message error raised by the draw
 function IconBrowserView._disable_icon_preview(self, widget, error_message)
     local content = widget and widget.content
 
@@ -2078,6 +2335,11 @@ function IconBrowserView._disable_icon_preview(self, widget, error_message)
     end
 end
 
+--- Updates the view each frame: layout revision, search focus and text, favorites and history
+-- changes, the query, scrolling and binding, the inspector, the tooltip and the status fade.
+-- number: dt frame delta time
+-- number: t time
+-- tab: input_service view input service
 function IconBrowserView.update(self, dt, t, input_service)
     IconBrowserView.super.update(self, dt, t, input_service)
 
@@ -2128,6 +2390,11 @@ end
 
 --- Chrome widgets are drawn inside `pcall` as well, so a missing shared material hides one widget
 -- instead of breaking the whole view.
+-- number: dt frame delta time
+-- number: t time
+-- tab: input_service input service of this draw
+-- tab: ui_renderer active UI renderer
+-- tab: render_settings render settings
 function IconBrowserView._draw_widgets(self, dt, t, input_service, ui_renderer, render_settings)
     local widgets = self._widgets
 
@@ -2146,6 +2413,9 @@ function IconBrowserView._draw_widgets(self, dt, t, input_service, ui_renderer, 
     end
 end
 
+--- Draws the visible slots inside `pcall`, disabling the icon of a slot whose material fails, and
+-- records the hovered slot and asset.
+-- tab: ui_renderer active UI renderer
 function IconBrowserView._draw_slots(self, ui_renderer)
     local slots = self._slots
     local hovered_asset, hovered_slot
@@ -2174,6 +2444,9 @@ function IconBrowserView._draw_slots(self, ui_renderer)
     self._hovered_slot = hovered_slot
 end
 
+--- Draws the inspector preview: background or checkerboard, the icon inside `pcall` and the
+-- fallback text.
+-- tab: ui_renderer active UI renderer
 function IconBrowserView._draw_preview(self, ui_renderer)
     local preview_widgets = self._preview_widgets
 
@@ -2198,6 +2471,13 @@ function IconBrowserView._draw_preview(self, ui_renderer)
     UIWidget.draw(preview_widgets.preview_fallback, ui_renderer)
 end
 
+--- Draws the chrome and the legend, then the slots and the preview, then an open menu. While a menu
+-- is open, or in the frame a click closed it, everything below the menu is drawn with the null input
+-- service, so clicks never reach it.
+-- number: dt frame delta time
+-- number: t time
+-- tab: input_service view input service
+-- int: layer start layer
 function IconBrowserView.draw(self, dt, t, input_service, layer)
     local blocked = self._open_popup ~= nil or self._swallow_input
     local base_input_service = blocked and input_service:null_service() or input_service
